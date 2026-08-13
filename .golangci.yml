@@ -1,0 +1,45 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose # an unclosed RPC response body leaks a connection per settlement
+    - errorlint # payment failures are matched with errors.As; broken checks are silent
+    - gosec
+    - misspell
+    - revive
+    - unconvert
+    - usestdlibvars
+
+  settings:
+    gosec:
+      excludes:
+        # Integer conversions are audited by hand where they touch chain values.
+        - G115
+    revive:
+      # An explicit rule list, not revive's defaults: this codebase documents
+      # related symbols with one group comment (a Service and its constructor,
+      # the protocol wire structs), which the exported-comment rule fights.
+      rules:
+        - name: context-as-argument
+        - name: errorf
+        - name: indent-error-flow
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+
+  exclusions:
+    rules:
+      - path: _test\.go$
+        linters:
+          - gosec # test fixtures use fixed keys and hard-coded amounts
+      - path: internal/mocks/
+        linters:
+          - revive # generated
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
