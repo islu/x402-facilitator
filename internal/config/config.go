@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,9 +44,12 @@ type SVMNetwork struct {
 
 // Config is the fully resolved facilitator configuration.
 type Config struct {
-	Port     string
-	LogLevel slog.Level
-	LogJSON  bool
+	Port string
+	// AdminPort serves /metrics, kept off the public port so wallet balances
+	// and traffic figures are not readable by every caller.
+	AdminPort string
+	LogLevel  slog.Level
+	LogJSON   bool
 
 	// TrustedProxies restricts which proxy IPs gin will trust for client IP
 	// resolution. Empty disables proxy trust entirely (the safe default).
@@ -75,17 +79,35 @@ type Config struct {
 	// GasLimit is the fallback gas limit used when estimation fails.
 	GasLimit uint64
 
-	// RateLimitPerMinute caps verify+settle calls per payer address. 0 disables.
+	// RateLimitPerMinute caps accepted verify+settle calls per payer address.
+	// 0 disables.
 	RateLimitPerMinute int
-	// MaxSettleAmount rejects settlements whose requirement amount exceeds this
-	// value, in the asset's atomic units. Nil disables the check.
-	MaxSettleAmount *big.Int
+	// RateLimitPerIPPerMinute caps verify+settle calls per caller IP, accepted
+	// or not. It is what bounds forged or junk traffic. 0 disables.
+	RateLimitPerIPPerMinute int
+	// AllowedAssets is the settlement allowlist with per-asset amount bounds.
+	// Empty accepts any asset.
+	AllowedAssets []AllowedAsset
 
 	// BalanceCheckInterval controls how often facilitator wallet balances are
 	// polled for the gas gauge. 0 disables the poller.
 	BalanceCheckInterval time.Duration
-	// MinBalanceWei is the native-balance threshold that triggers a warning.
-	MinBalanceWei *big.Int
+	// MinBalanceWei and MinBalanceLamports are the native-balance thresholds
+	// that trigger a warning, per chain family since their units differ.
+	MinBalanceWei      *big.Int
+	MinBalanceLamports *big.Int
+}
+
+// AllowedAsset is one asset the facilitator settles, with optional bounds on
+// the amount of a single settlement, in the asset's atomic units.
+type AllowedAsset struct {
+	// Network is the CAIP-2 identifier.
+	Network string
+	// Asset is the ERC-20 contract or SPL mint address.
+	Asset string
+	// Min and Max are nil when open.
+	Min *big.Int
+	Max *big.Int
 }
 
 // v1Aliases are the legacy network names for the chains that shipped before
@@ -105,6 +127,7 @@ var v1Aliases = map[string]string{
 func Load() (*Config, error) {
 	cfg := &Config{
 		Port:                    envString("PORT", "4022"),
+		AdminPort:               envString("ADMIN_PORT", "9090"),
 		LogLevel:                parseLogLevel(envString("LOG_LEVEL", "info")),
 		LogJSON:                 envBool("LOG_JSON", true),
 		TrustedProxies:          splitList(os.Getenv("TRUSTED_PROXIES")),
@@ -142,13 +165,26 @@ func Load() (*Config, error) {
 		fail("%v", err)
 	}
 	if cfg.MinBalanceWei == nil {
-		// 0.05 native units.
-		cfg.MinBalanceWei = new(big.Int).Div(big.NewInt(1e18), big.NewInt(20))
+		// 0.05 ETH.
+		cfg.MinBalanceWei = big.NewInt(5e16)
 	}
-	if cfg.MaxSettleAmount, err = envBigInt("MAX_SETTLE_AMOUNT"); err != nil {
+	if cfg.MinBalanceLamports, err = envBigInt("MIN_BALANCE_LAMPORTS"); err != nil {
 		fail("%v", err)
 	}
+	if cfg.MinBalanceLamports == nil {
+		// 0.05 SOL.
+		cfg.MinBalanceLamports = big.NewInt(5e7)
+	}
+	if strings.TrimSpace(os.Getenv("MAX_SETTLE_AMOUNT")) != "" {
+		// One ceiling across assets with different decimals limited nothing;
+		// failing beats silently dropping a limit the operator relied on.
+		fail("MAX_SETTLE_AMOUNT was replaced by per-asset limits: set ALLOWED_ASSETS=<network>/<asset>=<max>")
+	}
 	cfg.RateLimitPerMinute = envInt("RATE_LIMIT_PER_MINUTE", 0)
+	cfg.RateLimitPerIPPerMinute = envInt("RATE_LIMIT_PER_IP_PER_MINUTE", 0)
+	if cfg.AdminPort == cfg.Port {
+		fail("ADMIN_PORT must differ from PORT (%s): /metrics must not be public", cfg.Port)
+	}
 
 	evmRPCs, err := parseNetworkMap("EVM_RPC_URLS")
 	if err != nil {
@@ -217,6 +253,10 @@ func Load() (*Config, error) {
 		})
 	}
 
+	if cfg.AllowedAssets, err = parseAllowedAssets(cfg.Networks()); err != nil {
+		fail("%v", err)
+	}
+
 	if len(cfg.EVMNetworks) == 0 && len(cfg.SVMNetworks) == 0 && len(errs) == 0 {
 		fail("no networks configured: set EVM_RPC_URLS and/or SVM_RPC_URLS")
 	}
@@ -250,6 +290,57 @@ func resolveV1Alias(enabled bool, network string, overrides map[string]string) s
 		return alias
 	}
 	return v1Aliases[network]
+}
+
+// parseAllowedAssets reads ALLOWED_ASSETS: comma-separated
+// "<network>/<asset>=<bounds>" entries, where bounds is "max", "min:max", or
+// either side left empty to leave it open (":" allows the asset unbounded).
+//
+// Every network must be one this instance serves, so a typo fails the boot
+// instead of silently refusing every payment on the intended network.
+func parseAllowedAssets(networks []string) ([]AllowedAsset, error) {
+	entries, err := parseNetworkMap("ALLOWED_ASSETS")
+	if err != nil {
+		return nil, err
+	}
+	var out []AllowedAsset
+	for _, key := range sortedKeys(entries) {
+		network, asset, ok := strings.Cut(key, "/")
+		if !ok || asset == "" {
+			return nil, fmt.Errorf("ALLOWED_ASSETS: %q is not in <network>/<asset> form", key)
+		}
+		if !slices.Contains(networks, network) {
+			return nil, fmt.Errorf("ALLOWED_ASSETS: %s is not a configured network", network)
+		}
+		minRaw, maxRaw, hasMin := strings.Cut(entries[key], ":")
+		if !hasMin {
+			minRaw, maxRaw = "", minRaw
+		}
+		entry := AllowedAsset{Network: network, Asset: asset}
+		if entry.Min, err = parseAmount(minRaw); err != nil {
+			return nil, fmt.Errorf("ALLOWED_ASSETS: %s minimum: %w", key, err)
+		}
+		if entry.Max, err = parseAmount(maxRaw); err != nil {
+			return nil, fmt.Errorf("ALLOWED_ASSETS: %s maximum: %w", key, err)
+		}
+		if entry.Min != nil && entry.Max != nil && entry.Min.Cmp(entry.Max) > 0 {
+			return nil, fmt.Errorf("ALLOWED_ASSETS: %s minimum exceeds its maximum", key)
+		}
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+// parseAmount reads an atomic-unit amount; empty is an open bound.
+func parseAmount(raw string) (*big.Int, error) {
+	if raw = strings.TrimSpace(raw); raw == "" {
+		return nil, nil
+	}
+	v, ok := new(big.Int).SetString(raw, 10)
+	if !ok || v.Sign() < 0 {
+		return nil, fmt.Errorf("%q is not a non-negative integer (atomic units)", raw)
+	}
+	return v, nil
 }
 
 // evmChainIDFromCAIP2 extracts the chain ID from an "eip155:<chainID>" network.

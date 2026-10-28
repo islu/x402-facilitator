@@ -39,17 +39,19 @@ func initializeApp(ctx context.Context, cfg *config.Config) (*App, func(), error
 	}
 	slogLogger := logger.ProvideLogger(cfg)
 	processor := x402.NewProcessor(cfg, signers, svmSigners, slogLogger)
-	slidingWindow := infra.ProvideRateLimiter(cfg)
+	limiter := infra.ProvideRateLimiter(cfg)
 	registry := telemetry.New()
 	policy := app.ProvidePaymentPolicy(cfg)
-	service := payment.NewService(processor, slidingWindow, registry, policy, slogLogger)
+	service := payment.NewService(processor, limiter, registry, policy, slogLogger)
 	timeouts := http.ProvideTimeouts(cfg)
 	handlerHandler := handler.NewHandler(service, registry, timeouts)
-	engine := http.NewRouter(handlerHandler, cfg, slogLogger)
+	clientLimiter := infra.ProvideClientLimiter(cfg)
+	engine := http.NewRouter(handlerHandler, cfg, clientLimiter, slogLogger)
+	httpHandler := http.NewAdminRouter(handlerHandler, slogLogger)
 	walletRegistry := infra.ProvideWalletRegistry(signers, svmSigners)
 	walletConfig := app.ProvideWalletConfig(cfg)
 	walletService := wallet.NewService(walletRegistry, registry, walletConfig, slogLogger)
-	mainApp := NewApp(engine, walletService, slidingWindow, slogLogger)
+	mainApp := NewApp(engine, httpHandler, walletService, slogLogger)
 	return mainApp, func() {
 		cleanup()
 	}, nil

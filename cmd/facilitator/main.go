@@ -59,14 +59,6 @@ func run() error {
 		app.Wallets.Watch(workerCtx, cfg.BalanceCheckInterval)
 	}()
 
-	if app.Limiter.Enabled() {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			app.Limiter.RunCleanup(time.Minute, workerCtx.Done())
-		}()
-	}
-
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: app.Router,
@@ -78,19 +70,33 @@ func run() error {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	serverErrors := make(chan error, 1)
-	go func() {
-		app.Logger.Info("facilitator listening",
-			"port", cfg.Port,
-			"networks", cfg.Networks(),
-			"rate_limit_per_minute", cfg.RateLimitPerMinute,
-		)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	// Metrics live on their own port so wallet balances and traffic are not
+	// readable by every caller; expose it to the scraper only.
+	admin := &http.Server{
+		Addr:              ":" + cfg.AdminPort,
+		Handler:           app.Admin,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	serverErrors := make(chan error, 2)
+	serve := func(s *http.Server) {
+		if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErrors <- err
-			return
 		}
-		serverErrors <- nil
-	}()
+	}
+	app.Logger.Info("facilitator listening",
+		"port", cfg.Port,
+		"admin_port", cfg.AdminPort,
+		"networks", cfg.Networks(),
+		"rate_limit_per_minute", cfg.RateLimitPerMinute,
+		"rate_limit_per_ip_per_minute", cfg.RateLimitPerIPPerMinute,
+		"allowed_assets", len(cfg.AllowedAssets),
+	)
+	if len(cfg.AllowedAssets) == 0 {
+		app.Logger.Warn("ALLOWED_ASSETS is empty: any token is settled, and the settlement wallet pays gas for it")
+	}
+	go serve(server)
+	go serve(admin)
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
@@ -111,6 +117,8 @@ func run() error {
 			app.Logger.Error("graceful shutdown failed, closing connections", "error", err)
 			_ = server.Close()
 		}
+		// Metrics stay scrapeable while settlements drain, then go.
+		_ = admin.Close()
 		stopWorkers()
 		workers.Wait()
 		app.Logger.Info("shutdown complete")

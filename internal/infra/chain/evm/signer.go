@@ -84,6 +84,11 @@ type Signer struct {
 	nonceMu    sync.Mutex
 	nextNonce  uint64
 	nonceValid bool
+
+	// pending holds broadcast transactions until their receipt wait ends, so
+	// one that never confirms can be replaced at the same nonce.
+	pendingMu sync.Mutex
+	pending   map[common.Hash]*gethtypes.Transaction
 }
 
 // compile-time check that we satisfy the interface the mechanisms call.
@@ -123,6 +128,7 @@ func New(ctx context.Context, network string, cfg Config) (*Signer, error) {
 		client:  client,
 		chainID: chainID,
 		network: network,
+		pending: map[common.Hash]*gethtypes.Transaction{},
 	}, nil
 }
 
@@ -331,22 +337,32 @@ func (s *Signer) SendTransaction(ctx context.Context, to string, data []byte) (s
 		return "", fmt.Errorf("broadcast transaction: %w", err)
 	}
 
+	s.pendingMu.Lock()
+	s.pending[signed.Hash()] = signed
+	s.pendingMu.Unlock()
+
 	return signed.Hash().Hex(), nil
 }
 
 // WaitForTransactionReceipt polls until the transaction is mined, the deadline
 // passes or ctx is cancelled. Logs are included so the mechanism can confirm
 // the ERC-20 Transfer event actually matches the payment.
+//
+// A transaction this signer broadcast that is still unmined when the wait ends
+// is cancelled (see cancel): left alone it would block every later nonce.
 func (s *Signer) WaitForTransactionReceipt(ctx context.Context, txHash string) (*evmmech.TransactionReceipt, error) {
-	ctx, cancel := context.WithTimeout(ctx, s.cfg.ReceiptTimeout)
+	waitCtx, cancel := context.WithTimeout(ctx, s.cfg.ReceiptTimeout)
 	defer cancel()
 
 	hash := common.HexToHash(txHash)
+	defer s.takePending(hash)
+
 	ticker := time.NewTicker(s.cfg.ReceiptPollInterval)
 	defer ticker.Stop()
 
+	var lastErr error
 	for {
-		receipt, err := s.client.TransactionReceipt(ctx, hash)
+		receipt, err := s.client.TransactionReceipt(waitCtx, hash)
 		if err == nil && receipt != nil {
 			return &evmmech.TransactionReceipt{
 				Status:      receipt.Status,
@@ -355,18 +371,108 @@ func (s *Signer) WaitForTransactionReceipt(ctx context.Context, txHash string) (
 				Logs:        receipt.Logs,
 			}, nil
 		}
+		// Transient RPC errors are expected while the tx propagates; keep
+		// polling until the deadline rather than failing a paid settlement, but
+		// keep the last one so a timeout can say why.
 		if err != nil && !errors.Is(err, ethereum.NotFound) {
-			// Transient RPC errors are expected while the tx propagates; keep
-			// polling until the deadline rather than failing a paid settlement.
-			_ = err
+			lastErr = err
 		}
 
 		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("receipt for %s not found within %s: %w", txHash, s.cfg.ReceiptTimeout, ctx.Err())
+		case <-waitCtx.Done():
+			return nil, s.giveUp(ctx, hash, waitCtx.Err(), lastErr)
 		case <-ticker.C:
 		}
 	}
+}
+
+// giveUp builds the error for a receipt that never arrived, cancelling the
+// transaction if this signer sent it.
+func (s *Signer) giveUp(ctx context.Context, hash common.Hash, cause, lastRPCErr error) error {
+	err := fmt.Errorf("receipt for %s not found within %s: %w", hash.Hex(), s.cfg.ReceiptTimeout, cause)
+	if lastRPCErr != nil {
+		err = fmt.Errorf("%w (last RPC error: %w)", err, lastRPCErr)
+	}
+
+	stuck := s.takePending(hash)
+	if stuck == nil {
+		return err
+	}
+	// The caller's context is done or nearly so; the cancellation still has to
+	// reach the node.
+	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	replacement, cErr := s.cancel(cancelCtx, stuck)
+	if cErr != nil {
+		return fmt.Errorf("%w; cancelling it failed: %w", err, cErr)
+	}
+	return fmt.Errorf("%w; replaced with cancellation %s", err, replacement)
+}
+
+// cancel replaces a transaction that never confirmed with a zero-value
+// transfer to self at the same nonce, so it stops blocking every later nonce.
+//
+// It does not wait for the replacement: the next settlement simply queues
+// behind it. If the original lands first, the node rejects the replacement as
+// "nonce too low" — the settlement then went through after all, and the
+// resource server can look the hash up.
+func (s *Signer) cancel(ctx context.Context, stuck *gethtypes.Transaction) (string, error) {
+	tip, feeCap, err := s.feesPerGas(ctx)
+	if err != nil {
+		return "", err
+	}
+	tip, feeCap = replacementFees(stuck, tip, feeCap)
+	if s.cfg.MaxFeePerGasWei != nil && feeCap.Cmp(s.cfg.MaxFeePerGasWei) > 0 {
+		return "", fmt.Errorf("%w: replacement needs %s wei", ErrGasPriceTooHigh, feeCap)
+	}
+
+	tx := gethtypes.NewTx(&gethtypes.DynamicFeeTx{
+		ChainID:   s.chainID,
+		Nonce:     stuck.Nonce(),
+		To:        &s.address,
+		Value:     big.NewInt(0),
+		Gas:       s.estimateGas(ctx, s.address, nil),
+		GasTipCap: tip,
+		GasFeeCap: feeCap,
+	})
+	signed, err := gethtypes.SignTx(tx, gethtypes.LatestSignerForChainID(s.chainID), s.key)
+	if err != nil {
+		return "", fmt.Errorf("sign replacement: %w", err)
+	}
+	if err := s.client.SendTransaction(ctx, signed); err != nil {
+		return "", fmt.Errorf("broadcast replacement: %w", err)
+	}
+	return signed.Hash().Hex(), nil
+}
+
+// replacementFees prices a same-nonce replacement. Nodes refuse one unless
+// both the tip and the fee cap rise by at least 10% (geth's default), so each
+// is bumped 25% over the stuck transaction — or set to the current market
+// rate if that is higher, since a spike is usually why it got stuck.
+func replacementFees(stuck *gethtypes.Transaction, marketTip, marketFeeCap *big.Int) (tip, feeCap *big.Int) {
+	bump := func(v, floor *big.Int) *big.Int {
+		bumped := new(big.Int).Add(v, new(big.Int).Div(v, big.NewInt(4)))
+		if bumped.Cmp(floor) < 0 {
+			return new(big.Int).Set(floor)
+		}
+		return bumped
+	}
+	tip = bump(stuck.GasTipCap(), marketTip)
+	feeCap = bump(stuck.GasFeeCap(), marketFeeCap)
+	if feeCap.Cmp(tip) < 0 {
+		feeCap = new(big.Int).Set(tip)
+	}
+	return tip, feeCap
+}
+
+// takePending removes and returns a transaction this signer is tracking, or
+// nil if it is not tracking it.
+func (s *Signer) takePending(hash common.Hash) *gethtypes.Transaction {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	tx := s.pending[hash]
+	delete(s.pending, hash)
+	return tx
 }
 
 // GetBalance returns the native balance when tokenAddress is empty or the zero

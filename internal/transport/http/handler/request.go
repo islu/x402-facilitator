@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -21,11 +22,23 @@ type PaymentRequest struct {
 	PaymentRequirements json.RawMessage `json:"paymentRequirements"`
 }
 
-// bindPayment parses and validates a payment request body, answering 400
+// maxBodyBytes bounds a payment request body. Real payloads are a few KB (a
+// Solana transaction is capped at 1232 bytes); the body is decoded twice, so an
+// unbounded one is a cheap way to exhaust memory.
+const maxBodyBytes = 64 << 10
+
+// bindPayment parses and validates a payment request body, answering 4xx
 // itself when the body is unusable.
 func bindPayment(c *gin.Context) (payment.Request, bool) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBodyBytes)
+
 	var req PaymentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			response.Error(c, http.StatusRequestEntityTooLarge, "request body exceeds 64 KiB")
+			return payment.Request{}, false
+		}
 		response.Error(c, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return payment.Request{}, false
 	}

@@ -28,11 +28,12 @@ const (
 )
 
 type Service struct {
-	processor payment.Processor
-	limiter   ratelimit.Limiter
-	metrics   telemetry.Recorder
-	policy    payment.Policy
-	logger    *slog.Logger
+	processor   payment.Processor
+	limiter     ratelimit.Limiter
+	metrics     telemetry.Recorder
+	policy      payment.Policy
+	logger      *slog.Logger
+	settlements *settlementLog
 }
 
 func NewService(
@@ -44,28 +45,39 @@ func NewService(
 ) *Service {
 	describeMetrics(metrics)
 	return &Service{
-		processor: processor,
-		limiter:   limiter,
-		metrics:   metrics,
-		policy:    policy,
-		logger:    logger.With("service", "payment"),
+		processor:   processor,
+		limiter:     limiter,
+		metrics:     metrics,
+		policy:      policy,
+		logger:      logger.With("service", "payment"),
+		settlements: newSettlementLog(settlementRetention),
 	}
 }
 
-// checkRateLimit applies the per-payer quota.
+// rateLimited reports whether the payer has used up its quota.
+//
+// The quota counts only payments that proved the payer signed them (see
+// recordPayer), so a forged payload naming someone else's address cannot
+// exhaust that payer's quota. Unproven traffic is bounded per caller IP at the
+// HTTP layer instead.
 //
 // A payer the payload does not identify (Solana carries an opaque transaction)
 // is not limited: bucketing every anonymous request together would let one
 // caller exhaust the quota for all of them.
-func (s *Service) checkRateLimit(operation string, meta payment.Metadata) bool {
-	if !s.limiter.Enabled() || meta.Payer == "" {
-		return true
-	}
-	if s.limiter.Allow(meta.Payer) {
-		return true
+func (s *Service) rateLimited(operation string, meta payment.Metadata) bool {
+	if !s.limiter.Enabled() || meta.Payer == "" || !s.limiter.Exceeded(meta.Payer) {
+		return false
 	}
 	s.metrics.Inc(metricRateLimited, telemetry.Labels{"operation": operation})
-	return false
+	return true
+}
+
+// recordPayer counts a payment against its payer's quota once the mechanism
+// has accepted it.
+func (s *Service) recordPayer(meta payment.Metadata) {
+	if s.limiter.Enabled() && meta.Payer != "" {
+		s.limiter.Allow(meta.Payer)
+	}
 }
 
 // reasonLabel keeps unknown failure reasons out of the metric label space,

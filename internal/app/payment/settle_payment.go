@@ -11,26 +11,44 @@ import (
 
 // SettlePayment broadcasts a payment and waits for it to be confirmed.
 //
-// Local policy runs first — the rate limit and the settlement ceiling — because
+// A payment is settled at most once at a time: a retry that arrives while the
+// first attempt is in flight waits for it, and a retry after a transaction was
+// broadcast gets the recorded outcome instead of a second transaction.
+func (s *Service) SettlePayment(ctx context.Context, req payment.Request) (payment.SettleResult, error) {
+	key := settlementKey(req)
+	entry, leader := s.settlements.begin(key)
+	if !leader {
+		s.logger.InfoContext(ctx, "duplicate settlement joined the recorded attempt")
+		return entry.wait(ctx)
+	}
+
+	result, err := s.settle(ctx, req)
+	s.settlements.finish(key, entry, result, err)
+	return result, err
+}
+
+// settle runs local policy, then the mechanism.
+//
+// Local policy runs first — the rate limit and the asset allowlist — because
 // once the transaction is broadcast the facilitator has spent gas and the payer
 // may have been charged, whatever happens next.
-func (s *Service) SettlePayment(ctx context.Context, req payment.Request) (payment.SettleResult, error) {
+func (s *Service) settle(ctx context.Context, req payment.Request) (payment.SettleResult, error) {
 	meta := payment.ParseMetadata(req)
 
-	if !s.checkRateLimit("settle", meta) {
+	if s.rateLimited("settle", meta) {
 		s.logger.WarnContext(ctx, "settle rate limited", "payer", meta.Payer, "network", meta.Network)
 		return payment.SettleResult{}, payment.NewSettlementError(
 			payment.ReasonRateLimited, "too many requests for this payer", meta.Payer, meta.Network, "")
 	}
 
-	if err := s.policy.CheckSettleAmount(meta); err != nil {
+	if reason, message := s.policy.Check(meta); reason != "" {
 		s.metrics.Inc(metricRejected, telemetry.Labels{
 			"network": meta.Network,
-			"reason":  payment.ReasonAmountTooBig,
+			"reason":  reason,
 		})
-		s.logger.WarnContext(ctx, "settlement above value limit",
-			"payer", meta.Payer, "network", meta.Network, "amount", meta.Amount)
-		return payment.SettleResult{}, err
+		s.logger.WarnContext(ctx, "settlement refused by policy",
+			"payer", meta.Payer, "network", meta.Network, "asset", meta.Asset, "amount", meta.Amount, "reason", reason)
+		return payment.SettleResult{}, payment.NewSettlementError(reason, message, meta.Payer, meta.Network, "")
 	}
 
 	s.logger.InfoContext(ctx, "settlement started",
@@ -50,6 +68,7 @@ func (s *Service) SettlePayment(ctx context.Context, req payment.Request) (payme
 		"scheme":  meta.Scheme,
 		"success": "true",
 	})
+	s.recordPayer(meta)
 	// The only point where the transaction hash and the payer are both known —
 	// extend here to record settlements in a durable store.
 	s.logger.InfoContext(ctx, "payment settled",

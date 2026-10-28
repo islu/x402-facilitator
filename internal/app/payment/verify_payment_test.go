@@ -27,6 +27,9 @@ func Test_VerifyPayment(t *testing.T) {
 		wantErr     error
 		wantReason  string
 		wantMetrics map[string]telemetry.Labels
+		// skipsProcessor marks cases refused before the mechanism runs, which
+		// therefore observe no latency.
+		skipsProcessor bool
 	}{
 		{
 			name:     "a valid payment is returned with its payer",
@@ -65,6 +68,39 @@ func Test_VerifyPayment(t *testing.T) {
 				d.processor.EXPECT().Verify(gomock.Any(), gomock.Any()).Return(payment.VerifyResult{}, errRPCDown)
 			},
 			wantErr: errRPCDown,
+		},
+		{
+			// The resource server must learn a payment will be refused before it
+			// serves the content, not at settlement.
+			name:     "a payment outside the policy is invalid without reaching the processor",
+			requests: []payment.Request{evmRequest(t, testPayer, "1000")},
+			setup: func(d *serviceDeps) {
+				d.policy = payment.Policy{Assets: map[string]payment.AssetLimit{
+					payment.AssetKey(testNetwork, "0x000000000000000000000000000000000000dead"): {},
+				}}
+			},
+			wantReason: payment.ReasonAssetNotAllowed,
+			wantMetrics: map[string]telemetry.Labels{
+				metricVerifyFailures: {"network": testNetwork, "reason": payment.ReasonAssetNotAllowed},
+			},
+			skipsProcessor: true,
+		},
+		{
+			// A forged payload naming a victim's address fails verification, so
+			// it must not use up that victim's quota.
+			name: "only verified payments count against the payer quota",
+			requests: []payment.Request{
+				evmRequest(t, testPayer, "1000"),
+				evmRequest(t, testPayer, "1000"),
+			},
+			setup: func(d *serviceDeps) {
+				d.limiter = &countingLimiter{remaining: 1}
+				d.processor.EXPECT().
+					Verify(gomock.Any(), gomock.Any()).
+					Return(payment.VerifyResult{}, payment.NewVerificationError("invalid_signature", "", testPayer)).
+					Times(2)
+			},
+			wantReason: "invalid_signature",
 		},
 		{
 			name: "a rate limited payer never reaches the processor",
@@ -136,7 +172,9 @@ func Test_VerifyPayment(t *testing.T) {
 			for name, labels := range tt.wantMetrics {
 				assert.Equal(t, 1, metrics.count(name, labels), "metric %s%v", name, labels)
 			}
-			assert.Contains(t, metrics.observed, metricVerifyDuration, "verification latency should be observed")
+			if !tt.skipsProcessor {
+				assert.Contains(t, metrics.observed, metricVerifyDuration, "verification latency should be observed")
+			}
 		})
 	}
 }

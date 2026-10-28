@@ -169,3 +169,30 @@ func Test_Cleanup(t *testing.T) {
 		})
 	}
 }
+
+// Exceeded lets a caller check a quota before doing work and count the attempt
+// only once it has proven itself, so it must never record anything.
+func Test_Exceeded(t *testing.T) {
+	limiter := New(1, time.Minute)
+
+	assert.False(t, limiter.Exceeded("0xabc"))
+	assert.False(t, limiter.Exceeded("0xabc"), "checking twice records nothing")
+	require.True(t, limiter.Allow("0xabc"))
+	assert.True(t, limiter.Exceeded("0xabc"))
+	assert.False(t, limiter.Exceeded(""), "an empty key is never limited")
+}
+
+// One-shot keys must not pile up when nothing calls Cleanup.
+func Test_Allow_PrunesAgedOutKeys(t *testing.T) {
+	now := time.Now()
+	limiter := New(5, time.Minute)
+	limiter.now = func() time.Time { return now }
+	require.True(t, limiter.Allow("0xabc"))
+
+	now = now.Add(2 * time.Minute)
+	require.True(t, limiter.Allow("0xdef"))
+
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	assert.NotContains(t, limiter.hits, "0xabc")
+}

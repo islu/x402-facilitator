@@ -64,7 +64,7 @@ func Test_SettlePayment(t *testing.T) {
 			name:   "an amount above the ceiling never reaches the processor",
 			amount: "2000000",
 			setup: func(d *serviceDeps) {
-				d.policy = payment.Policy{MaxSettleAmount: big.NewInt(1_000_000)}
+				d.policy = ceilingPolicy(1_000_000)
 			},
 			wantReason: payment.ReasonAmountTooBig,
 			wantMetrics: map[string]telemetry.Labels{
@@ -75,7 +75,7 @@ func Test_SettlePayment(t *testing.T) {
 			name:   "an amount exactly at the ceiling settles",
 			amount: "1000000",
 			setup: func(d *serviceDeps) {
-				d.policy = payment.Policy{MaxSettleAmount: big.NewInt(1_000_000)}
+				d.policy = ceilingPolicy(1_000_000)
 				d.processor.EXPECT().
 					Settle(gomock.Any(), gomock.Any()).
 					Return(payment.SettleResult{Success: true, Network: testNetwork}, nil)
@@ -88,6 +88,21 @@ func Test_SettlePayment(t *testing.T) {
 				d.processor.EXPECT().
 					Settle(gomock.Any(), gomock.Any()).
 					Return(payment.SettleResult{Success: true, Network: testNetwork}, nil)
+			},
+		},
+		{
+			// A worthless token would otherwise have the settlement wallet pay
+			// gas to move it.
+			name:   "an asset outside the allowlist never reaches the processor",
+			amount: "1000",
+			setup: func(d *serviceDeps) {
+				d.policy = payment.Policy{Assets: map[string]payment.AssetLimit{
+					payment.AssetKey(testNetwork, "0x000000000000000000000000000000000000dead"): {},
+				}}
+			},
+			wantReason: payment.ReasonAssetNotAllowed,
+			wantMetrics: map[string]telemetry.Labels{
+				metricRejected: {"network": testNetwork, "reason": payment.ReasonAssetNotAllowed},
 			},
 		},
 		{
@@ -145,6 +160,110 @@ func Test_SettlePayment(t *testing.T) {
 			}
 		})
 	}
+}
+
+func ceilingPolicy(max int64) payment.Policy {
+	return payment.Policy{Assets: map[string]payment.AssetLimit{
+		payment.AssetKey(testNetwork, testAsset): {Max: big.NewInt(max)},
+	}}
+}
+
+func Test_SettlePayment_Idempotent(t *testing.T) {
+	settled := payment.SettleResult{Success: true, Transaction: "0xdead", Network: testNetwork, Payer: testPayer}
+	reverted := payment.NewSettlementError("transaction_failed", "reverted", testPayer, testNetwork, "0xdead")
+
+	tests := []struct {
+		name string
+		// first is what the processor answers the first attempt with.
+		firstResult payment.SettleResult
+		firstErr    error
+		// wantCalls is how many times a retry reaches the processor in total.
+		wantCalls int
+	}{
+		{
+			// The mechanism would answer a retry with "nonce already used",
+			// telling the resource server a charged payer did not pay.
+			name:        "a retry after success replays the recorded transaction",
+			firstResult: settled,
+			wantCalls:   1,
+		},
+		{
+			name:      "a retry after a broadcast failure replays it instead of re-broadcasting",
+			firstErr:  reverted,
+			wantCalls: 1,
+		},
+		{
+			// Nothing reached the chain, so there is nothing to protect.
+			name:      "a retry after an outage tries again",
+			firstErr:  errRPCDown,
+			wantCalls: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			deps := newServiceDeps(ctrl)
+			calls := 0
+			deps.processor.EXPECT().
+				Settle(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(context.Context, payment.Request) (payment.SettleResult, error) {
+					calls++
+					if calls == 1 {
+						return tt.firstResult, tt.firstErr
+					}
+					return settled, nil
+				}).
+				AnyTimes()
+			svc := newService(deps)
+			req := evmRequest(t, testPayer, "1000")
+			// Same document, different whitespace: a retry that re-serialized it.
+			retry := payment.Request{Payload: append([]byte(" "), req.Payload...), Requirements: req.Requirements}
+
+			first, firstErr := svc.SettlePayment(context.Background(), req)
+			second, secondErr := svc.SettlePayment(context.Background(), retry)
+
+			assert.Equal(t, tt.wantCalls, calls)
+			if tt.wantCalls == 1 {
+				assert.Equal(t, first, second)
+				assert.Equal(t, firstErr, secondErr)
+			}
+		})
+	}
+}
+
+// Two attempts racing each other would both pass verification and both
+// broadcast; the second must wait for the first instead.
+func Test_SettlePayment_ConcurrentDuplicateJoinsInFlight(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	deps := newServiceDeps(ctrl)
+	started, release := make(chan struct{}), make(chan struct{})
+	deps.processor.EXPECT().
+		Settle(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(context.Context, payment.Request) (payment.SettleResult, error) {
+			close(started)
+			<-release
+			return payment.SettleResult{Success: true, Transaction: "0xdead"}, nil
+		}).
+		Times(1)
+	svc := newService(deps)
+	req := evmRequest(t, testPayer, "1000")
+
+	leader := make(chan payment.SettleResult)
+	go func() {
+		result, _ := svc.SettlePayment(context.Background(), req)
+		leader <- result
+	}()
+	<-started
+	follower := make(chan payment.SettleResult)
+	go func() {
+		result, _ := svc.SettlePayment(context.Background(), req)
+		follower <- result
+	}()
+	close(release)
+
+	assert.Equal(t, "0xdead", (<-leader).Transaction)
+	assert.Equal(t, "0xdead", (<-follower).Transaction)
 }
 
 func Test_ListSupported(t *testing.T) {

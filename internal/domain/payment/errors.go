@@ -6,8 +6,10 @@ import "fmt"
 // (invalid_signature, insufficient_funds, …) are passed through from the
 // payment mechanism unchanged.
 const (
-	ReasonRateLimited  = "rate_limit_exceeded"
-	ReasonAmountTooBig = "amount_exceeds_limit"
+	ReasonRateLimited     = "rate_limit_exceeded"
+	ReasonAmountTooBig    = "amount_exceeds_limit"
+	ReasonAmountTooSmall  = "amount_below_minimum"
+	ReasonAssetNotAllowed = "asset_not_allowed"
 )
 
 // VerificationError means the payment is not valid. It is an error rather than

@@ -24,6 +24,7 @@ func initializeApp(ctx context.Context, cfg *config.Config) (*App, func(), error
 		httpTransport.ProvideTimeouts,
 		handler.NewHandler,
 		httpTransport.NewRouter,
+		httpTransport.NewAdminRouter,
 		NewApp,
 	)
 	return nil, nil, nil

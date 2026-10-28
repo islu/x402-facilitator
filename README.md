@@ -26,7 +26,8 @@ following the structure in the SDK's [FACILITATOR.md](https://github.com/x402-fo
 | x402 SDK adapter: scheme registration, error translation | [internal/infra/x402/](internal/infra/x402/) |
 | EVM signer: EIP-712 recovery, EIP-1559 fees, nonce serialization, receipt polling | [internal/infra/chain/evm/signer.go](internal/infra/chain/evm/signer.go) |
 | Solana signer: co-sign, simulate, send, confirm | [internal/infra/chain/svm/signer.go](internal/infra/chain/svm/signer.go) |
-| `/verify`, `/settle`, `/supported` + `/healthz`, `/readyz`, `/metrics` | [internal/transport/http/](internal/transport/http/) |
+| `/verify`, `/settle`, `/supported` + `/healthz`, `/readyz`; `/metrics` on a separate admin port | [internal/transport/http/](internal/transport/http/) |
+| Asset allowlist with per-asset min/max, idempotent `/settle`, stuck-transaction cancellation | [policy.go](internal/domain/payment/policy.go), [settlement_log.go](internal/app/payment/settlement_log.go), [signer.go](internal/infra/chain/evm/signer.go) |
 | Wallet balance monitoring | [internal/app/wallet/](internal/app/wallet/) |
 | Env-driven config with fail-fast validation | [internal/config/config.go](internal/config/config.go) |
 
@@ -88,8 +89,10 @@ Everything is environment-driven; a `.env` file is loaded if present. See
 | `EVM_PRIVATE_KEY` | — | Settlement wallet, overridable per network via `EVM_PRIVATE_KEYS` |
 | `SVM_RPC_URLS` / `SVM_PRIVATE_KEY` | — | Same, for Solana (optional) |
 | `PORT` | `4022` | Listen port |
-| `RATE_LIMIT_PER_MINUTE` | `0` (off) | Verify+settle calls allowed per payer |
-| `MAX_SETTLE_AMOUNT` | unlimited | Per-settlement ceiling, in atomic units |
+| `ADMIN_PORT` | `9090` | `/metrics` only; expose to the scraper, not the internet |
+| `ALLOWED_ASSETS` | empty (any) | `network/asset=max` or `=min:max`, atomic units. **Set it in production** — otherwise the wallet pays gas to settle any token |
+| `RATE_LIMIT_PER_MINUTE` | `0` (off) | Accepted verify+settle calls per payer |
+| `RATE_LIMIT_PER_IP_PER_MINUTE` | `0` (off) | All verify+settle calls per caller IP — the bound on forged or junk traffic |
 | `MAX_GAS_PRICE_GWEI` | uncapped | Refuse to broadcast above this fee |
 | `EIP6492_ALLOWED_FACTORIES` | empty (deny) | Smart-wallet factories allowed during settlement |
 | `VERIFY_TIMEOUT` / `SETTLE_TIMEOUT` | `30s` / `90s` | Per-request budgets |
@@ -145,7 +148,7 @@ Registered `(version, scheme, network)` triples plus the settlement addresses.
 
 - `GET /healthz` — process liveness
 - `GET /readyz` — `503` when no network is usable, so a load balancer can drain the instance
-- `GET /metrics` — Prometheus text format
+- `GET /metrics` — Prometheus text format, on `ADMIN_PORT` only
 
 ## Architecture
 
@@ -182,7 +185,7 @@ provider sets in `internal/{app,infra}/provider.go`, injector in
 | --- | --- |
 | Add a network | an entry in `EVM_RPC_URLS` — no code |
 | Add a payment scheme | register it in [`infra/x402.NewProcessor`](internal/infra/x402/facilitator.go) |
-| Persist settlements | `SettlePayment` in [app/payment](internal/app/payment/settle_payment.go), where the transaction hash and payer are both known |
+| Persist settlements | replace the in-memory [`settlementLog`](internal/app/payment/settlement_log.go), which already sees every settlement's key, hash and outcome |
 | Add a policy (fraud rules, allowlists) | a check in the use case, or a method on [`payment.Policy`](internal/domain/payment/policy.go) |
 | Swap metric storage or the rate limiter | a new adapter under `internal/infra` — the ports do not move |
 | Add auth | middleware in [transport/http](internal/transport/http/router.go); the endpoints are unauthenticated by design, since a facilitator normally serves many resource servers |
@@ -202,13 +205,25 @@ the signing calls in
 nothing else in the codebase touches the key.
 
 **Gas.** `facilitator_wallet_balance` is exported per network and warned on below
-`MIN_BALANCE_WEI`. Alert on it: a facilitator out of gas keeps verifying happily
-while every settlement fails.
+`MIN_BALANCE_WEI` (EVM) or `MIN_BALANCE_LAMPORTS` (Solana). Alert on it: a
+facilitator out of gas keeps verifying happily while every settlement fails.
+`ALLOWED_ASSETS` is the other half: without it anyone can deploy a worthless
+EIP-3009 token and have your wallet pay gas to move it.
 
-**Scaling.** Instances are stateless apart from two things: nonces are serialized
-per process, so **each replica needs its own settlement wallet** or they will
-fight over nonces; and the rate limiter is in-process, so a cluster-wide limit
-needs a shared store.
+**Stuck transactions.** A settlement still unmined after `RECEIPT_TIMEOUT` is
+replaced at the same nonce by a zero-value self-transfer at a higher fee, so one
+underpriced transaction cannot block every later one. The settle response
+reports failure with the original hash and the replacement's.
+
+**Idempotency.** A `/settle` retry for the same payload joins the attempt in
+flight, or — once a transaction was broadcast — gets the recorded outcome for
+10 minutes instead of a second transaction.
+
+**Scaling.** Instances are stateless apart from three things, all in-process:
+nonces are serialized per process, so **each replica needs its own settlement
+wallet**; the rate limiters need a shared store for a cluster-wide limit; and
+the settlement log only deduplicates retries that reach the same replica. See
+[BACKLOG.md](BACKLOG.md).
 
 **Timeouts.** Verification is a signature check; settlement waits on block
 inclusion. `RECEIPT_TIMEOUT` must stay below `SETTLE_TIMEOUT`, which is enforced
@@ -218,9 +233,10 @@ at startup.
 before the first confirms, and the RPC reports success both times. The shared
 `SettlementCache` rejects the second attempt with `duplicate_settlement`.
 
-**Metrics.** `facilitator_verifications_total`, `facilitator_settlements_total`,
+**Metrics.** Served on `ADMIN_PORT`. `facilitator_verifications_total`, `facilitator_settlements_total`,
 `facilitator_verify_failures_total`, `facilitator_settle_failures_total`,
-`facilitator_rate_limited_total`, `facilitator_wallet_balance`, and duration
+`facilitator_rate_limited_total`, `facilitator_settle_rejected_total`,
+`facilitator_wallet_balance`, and duration
 histograms for verify and settle. Alert on settlement failure rate and confirmation
 latency, not just error counts.
 

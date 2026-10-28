@@ -14,7 +14,8 @@ var envKeys = []string{
 	"EVM_PRIVATE_KEY", "SVM_PRIVATE_KEY",
 	"EVM_PRIVATE_KEYS", "SVM_PRIVATE_KEYS",
 	"EVM_V1_ALIASES", "SVM_V1_ALIASES",
-	"ENABLE_V1", "MAX_GAS_PRICE_GWEI", "MAX_SETTLE_AMOUNT",
+	"ENABLE_V1", "MAX_GAS_PRICE_GWEI", "MAX_SETTLE_AMOUNT", "ALLOWED_ASSETS",
+	"PORT", "ADMIN_PORT",
 	"VERIFY_TIMEOUT", "SETTLE_TIMEOUT", "RECEIPT_TIMEOUT",
 }
 
@@ -125,15 +126,45 @@ func Test_Load(t *testing.T) {
 			},
 		},
 		{
-			name: "an unset gas ceiling and settlement limit stay nil",
+			name: "an unset gas ceiling and allowlist stay empty",
 			env: map[string]string{
 				"EVM_RPC_URLS":    "eip155:84532=https://sepolia.base.org",
 				"EVM_PRIVATE_KEY": "0xabc",
 			},
 			assert: func(t *testing.T, cfg *Config) {
 				assert.Nil(t, cfg.MaxFeePerGasWei, "uncapped gas price")
-				assert.Nil(t, cfg.MaxSettleAmount, "no settlement ceiling")
-				assert.NotNil(t, cfg.MinBalanceWei, "the balance warning has a default")
+				assert.Empty(t, cfg.AllowedAssets, "no allowlist")
+			},
+		},
+		{
+			// Wei and lamports differ by nine decimals; one shared default had
+			// every Solana wallet reported low forever.
+			name: "balance warnings default to 0.05 in each chain's own unit",
+			env: map[string]string{
+				"EVM_RPC_URLS":    "eip155:84532=https://sepolia.base.org",
+				"EVM_PRIVATE_KEY": "0xabc",
+			},
+			assert: func(t *testing.T, cfg *Config) {
+				assert.Equal(t, "50000000000000000", cfg.MinBalanceWei.String())
+				assert.Equal(t, "50000000", cfg.MinBalanceLamports.String())
+			},
+		},
+		{
+			name: "allowed assets parse max, min:max and open bounds",
+			env: map[string]string{
+				"EVM_RPC_URLS":    "eip155:84532=https://sepolia.base.org",
+				"EVM_PRIVATE_KEY": "0xabc",
+				"ALLOWED_ASSETS":  "eip155:84532/0xaaa=1000,eip155:84532/0xbbb=10:2000,eip155:84532/0xccc=:",
+			},
+			assert: func(t *testing.T, cfg *Config) {
+				require.Len(t, cfg.AllowedAssets, 3)
+				a, b, c := cfg.AllowedAssets[0], cfg.AllowedAssets[1], cfg.AllowedAssets[2]
+				assert.Nil(t, a.Min)
+				assert.Equal(t, "1000", a.Max.String())
+				assert.Equal(t, "10", b.Min.String())
+				assert.Equal(t, "2000", b.Max.String())
+				assert.Nil(t, c.Min)
+				assert.Nil(t, c.Max)
 			},
 		},
 		{
@@ -241,13 +272,51 @@ func Test_Load_Errors(t *testing.T) {
 			wantErr: "is not a duration",
 		},
 		{
-			name: "a non-numeric settlement ceiling",
+			// A limit the operator relied on must not disappear silently.
+			name: "the removed global settlement ceiling",
 			env: map[string]string{
 				"EVM_RPC_URLS":      "eip155:84532=https://sepolia.base.org",
 				"EVM_PRIVATE_KEY":   "0xabc",
-				"MAX_SETTLE_AMOUNT": "10 USDC",
+				"MAX_SETTLE_AMOUNT": "10000000",
+			},
+			wantErr: "replaced by per-asset limits",
+		},
+		{
+			name: "an allowed asset on a network this instance does not serve",
+			env: map[string]string{
+				"EVM_RPC_URLS":    "eip155:84532=https://sepolia.base.org",
+				"EVM_PRIVATE_KEY": "0xabc",
+				"ALLOWED_ASSETS":  "eip155:8453/0xaaa=1000",
+			},
+			wantErr: "not a configured network",
+		},
+		{
+			name: "an allowed asset with a non-numeric bound",
+			env: map[string]string{
+				"EVM_RPC_URLS":    "eip155:84532=https://sepolia.base.org",
+				"EVM_PRIVATE_KEY": "0xabc",
+				"ALLOWED_ASSETS":  "eip155:84532/0xaaa=10 USDC",
 			},
 			wantErr: "is not a non-negative integer",
+		},
+		{
+			name: "an allowed asset whose minimum exceeds its maximum",
+			env: map[string]string{
+				"EVM_RPC_URLS":    "eip155:84532=https://sepolia.base.org",
+				"EVM_PRIVATE_KEY": "0xabc",
+				"ALLOWED_ASSETS":  "eip155:84532/0xaaa=2000:1000",
+			},
+			wantErr: "minimum exceeds its maximum",
+		},
+		{
+			name: "the admin port shared with the public port",
+			env: map[string]string{
+				"EVM_RPC_URLS":    "eip155:84532=https://sepolia.base.org",
+				"EVM_PRIVATE_KEY": "0xabc",
+				"PORT":            "4022",
+				"ADMIN_PORT":      "4022",
+			},
+			wantErr: "ADMIN_PORT must differ from PORT",
 		},
 	}
 

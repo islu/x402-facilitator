@@ -18,10 +18,18 @@ import (
 func (s *Service) VerifyPayment(ctx context.Context, req payment.Request) (payment.VerifyResult, error) {
 	meta := payment.ParseMetadata(req)
 
-	if !s.checkRateLimit("verify", meta) {
+	if s.rateLimited("verify", meta) {
 		s.logger.WarnContext(ctx, "verify rate limited", "payer", meta.Payer, "network", meta.Network)
 		return payment.VerifyResult{}, payment.NewVerificationError(
 			payment.ReasonRateLimited, "too many requests for this payer", meta.Payer)
+	}
+
+	// Policy runs at verify too, so a resource server learns a payment will be
+	// refused before it serves the content, not after.
+	if reason, message := s.policy.Check(meta); reason != "" {
+		err := payment.NewVerificationError(reason, message, meta.Payer)
+		s.recordVerifyFailure(ctx, meta, err)
+		return payment.VerifyResult{}, err
 	}
 
 	s.logger.DebugContext(ctx, "verify started",
@@ -41,6 +49,7 @@ func (s *Service) VerifyPayment(ctx context.Context, req payment.Request) (payme
 		"scheme":  meta.Scheme,
 		"valid":   "true",
 	})
+	s.recordPayer(meta)
 	s.logger.InfoContext(ctx, "payment verified",
 		"network", meta.Network, "scheme", meta.Scheme, "payer", result.Payer)
 

@@ -50,9 +50,10 @@ type SupportedKind struct {
 }
 
 // RegisterPaymentRoutes mounts the three endpoints the x402 protocol defines.
-func RegisterPaymentRoutes(router gin.IRoutes, h *Handler) {
-	router.POST("/verify", h.Verify)
-	router.POST("/settle", h.Settle)
+// limit guards the two that cost RPC calls and gas; /supported is a cheap read.
+func RegisterPaymentRoutes(router gin.IRoutes, h *Handler, limit gin.HandlerFunc) {
+	router.POST("/verify", limit, h.Verify)
+	router.POST("/settle", limit, h.Settle)
 	router.GET("/supported", h.Supported)
 }
 
@@ -83,7 +84,7 @@ func (h *Handler) Verify(c *gin.Context) {
 			})
 			return
 		}
-		response.Error(c, http.StatusInternalServerError, err.Error())
+		systemError(c, err)
 		return
 	}
 
@@ -123,7 +124,7 @@ func (h *Handler) Settle(c *gin.Context) {
 			})
 			return
 		}
-		response.Error(c, http.StatusInternalServerError, err.Error())
+		systemError(c, err)
 		return
 	}
 
@@ -166,4 +167,13 @@ func orEmpty(values []string) []string {
 		return []string{}
 	}
 	return values
+}
+
+// systemError answers 500 when the facilitator could not reach a verdict.
+//
+// The cause stays in the request log only: RPC errors embed the endpoint URL,
+// and with it the provider API key.
+func systemError(c *gin.Context, err error) {
+	_ = c.Error(err)
+	response.Error(c, http.StatusInternalServerError, "facilitator could not complete the request; retry")
 }

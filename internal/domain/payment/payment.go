@@ -28,6 +28,9 @@ type Metadata struct {
 	Version int
 	Scheme  string
 	Network string
+	// Asset is the token the requirements ask for (an ERC-20 contract or an
+	// SPL mint), hex addresses lowercased. Empty if absent.
+	Asset string
 	// Amount is the requirement amount in the asset's atomic units, empty if
 	// absent or unparseable.
 	Amount *big.Int

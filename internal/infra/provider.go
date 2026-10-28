@@ -32,9 +32,9 @@ var ProviderInfraSet = wire.NewSet(
 	x402.NewProcessor,
 	wire.Bind(new(domainpayment.Processor), new(*x402.Processor)),
 
-	// policy
+	// policy: one quota per payer, one per caller IP
 	ProvideRateLimiter,
-	wire.Bind(new(domainratelimit.Limiter), new(*ratelimit.SlidingWindow)),
+	ProvideClientLimiter,
 
 	// telemetry: one registry serves both the write and read ports
 	telemetry.New,
@@ -47,8 +47,13 @@ var ProviderInfraSet = wire.NewSet(
 
 // ProvideRateLimiter builds the per-payer limiter. The window is a minute
 // because that is the unit the configured limit is expressed in.
-func ProvideRateLimiter(cfg *config.Config) *ratelimit.SlidingWindow {
+func ProvideRateLimiter(cfg *config.Config) domainratelimit.Limiter {
 	return ratelimit.New(cfg.RateLimitPerMinute, time.Minute)
+}
+
+// ProvideClientLimiter builds the per-caller-IP limiter for the HTTP layer.
+func ProvideClientLimiter(cfg *config.Config) domainratelimit.ClientLimiter {
+	return ratelimit.New(cfg.RateLimitPerIPPerMinute, time.Minute)
 }
 
 // ProvideWalletRegistry collects every chain's settlement wallets into the

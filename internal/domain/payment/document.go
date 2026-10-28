@@ -32,7 +32,7 @@ func ParseMetadata(req Request) Metadata {
 	inner, _ := payload["payload"].(map[string]any)
 
 	meta := Metadata{
-		Payer: normalizePayer(lookupPayer(inner, payload)),
+		Payer: normalizeAddress(lookupPayer(inner, payload)),
 	}
 
 	if version, ok := numberAt(payload, "x402Version"); ok {
@@ -45,6 +45,7 @@ func ParseMetadata(req Request) Metadata {
 	accepted, _ := payload["accepted"].(map[string]any)
 	meta.Scheme = firstString(requirements, accepted, payload)("scheme")
 	meta.Network = firstString(requirements, accepted, payload)("network")
+	meta.Asset = normalizeAddress(firstString(requirements, accepted)("asset"))
 
 	// v1 calls it maxAmountRequired, v2 calls it amount.
 	amount := firstString(requirements, accepted)("amount")
@@ -126,12 +127,18 @@ func stringAtPath(payload map[string]any, path []string) (string, bool) {
 	return "", false
 }
 
-// normalizePayer lowercases hex addresses so mixed-case (EIP-55 checksummed)
-// spellings of one address are treated as the same payer. Non-hex identifiers
+// normalizeAddress lowercases hex addresses so mixed-case (EIP-55 checksummed)
+// spellings of one address are treated as the same account. Non-hex identifiers
 // such as Solana base58 keys are case-sensitive and left untouched.
-func normalizePayer(payer string) string {
-	if strings.HasPrefix(payer, "0x") || strings.HasPrefix(payer, "0X") {
-		return strings.ToLower(payer)
+func normalizeAddress(address string) string {
+	if strings.HasPrefix(address, "0x") || strings.HasPrefix(address, "0X") {
+		return strings.ToLower(address)
 	}
-	return payer
+	return address
+}
+
+// AssetKey identifies one asset on one network, in the form the settlement
+// policy is keyed by.
+func AssetKey(network, asset string) string {
+	return network + "/" + normalizeAddress(asset)
 }

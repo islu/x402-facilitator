@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	ethmath "github.com/ethereum/go-ethereum/common/math"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 	"github.com/stretchr/testify/assert"
@@ -234,6 +235,47 @@ func Test_VerifyTypedData(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantValid, valid)
+		})
+	}
+}
+
+func Test_replacementFees(t *testing.T) {
+	stuck := gethtypes.NewTx(&gethtypes.DynamicFeeTx{
+		GasTipCap: big.NewInt(100),
+		GasFeeCap: big.NewInt(1000),
+	})
+
+	tests := []struct {
+		name                 string
+		marketTip, marketCap int64
+		wantTip, wantCap     int64
+	}{
+		{
+			// Nodes refuse a replacement that does not raise both by 10%.
+			name:      "a calm market bumps both fees 25%",
+			marketTip: 50, marketCap: 500,
+			wantTip: 125, wantCap: 1250,
+		},
+		{
+			// A fee spike is usually why the transaction got stuck; bumping
+			// 25% over a price that is already too low would get stuck again.
+			name:      "a market above the bump wins",
+			marketTip: 300, marketCap: 5000,
+			wantTip: 300, wantCap: 5000,
+		},
+		{
+			name:      "the fee cap never falls below the tip",
+			marketTip: 2000, marketCap: 500,
+			wantTip: 2000, wantCap: 2000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tip, feeCap := replacementFees(stuck, big.NewInt(tt.marketTip), big.NewInt(tt.marketCap))
+
+			assert.Equal(t, tt.wantTip, tip.Int64())
+			assert.Equal(t, tt.wantCap, feeCap.Int64())
 		})
 	}
 }

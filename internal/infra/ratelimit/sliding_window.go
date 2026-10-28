@@ -20,8 +20,9 @@ type SlidingWindow struct {
 	window time.Duration
 	now    func() time.Time
 
-	mu   sync.Mutex
-	hits map[string][]time.Time
+	mu        sync.Mutex
+	hits      map[string][]time.Time
+	lastPrune time.Time
 }
 
 var _ domain.Limiter = (*SlidingWindow)(nil)
@@ -49,11 +50,50 @@ func (l *SlidingWindow) Allow(key string) bool {
 	if !l.Enabled() || key == "" {
 		return true
 	}
-
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := l.now()
+	// ponytail: a full sweep once per window under the lock, so one-shot keys
+	// do not accumulate without a cleanup goroutine per limiter. Shard the map
+	// if the key count ever makes this pause visible.
+	if now.Sub(l.lastPrune) >= l.window {
+		l.pruneLocked(now)
+	}
+	kept := l.liveLocked(key, now)
+	if len(kept) >= l.limit {
+		l.hits[key] = kept
+		return false
+	}
+	l.hits[key] = append(kept, now)
+	return true
+}
+
+// Exceeded reports whether key has used up its quota, without recording an
+// event.
+func (l *SlidingWindow) Exceeded(key string) bool {
+	if !l.Enabled() || key == "" {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.liveLocked(key, l.now())) >= l.limit
+}
+
+// Cleanup drops keys whose events have all aged out. Allow runs it once per
+// window, so callers only need it to force a sweep.
+func (l *SlidingWindow) Cleanup() {
+	if !l.Enabled() {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.pruneLocked(l.now())
+}
+
+// liveLocked returns the events for key still inside the window. Callers must
+// hold l.mu.
+func (l *SlidingWindow) liveLocked(key string, now time.Time) []time.Time {
 	cutoff := now.Add(-l.window)
 	kept := l.hits[key][:0]
 	for _, hit := range l.hits[key] {
@@ -61,55 +101,17 @@ func (l *SlidingWindow) Allow(key string) bool {
 			kept = append(kept, hit)
 		}
 	}
-
-	if len(kept) >= l.limit {
-		l.hits[key] = kept
-		return false
-	}
-
-	l.hits[key] = append(kept, now)
-	return true
+	return kept
 }
 
-// Cleanup drops keys whose events have all aged out. Run it periodically so
-// one-shot payers do not accumulate in memory.
-func (l *SlidingWindow) Cleanup() {
-	if !l.Enabled() {
-		return
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	cutoff := l.now().Add(-l.window)
-	for key, hits := range l.hits {
-		live := hits[:0]
-		for _, hit := range hits {
-			if hit.After(cutoff) {
-				live = append(live, hit)
-			}
-		}
-		if len(live) == 0 {
+// pruneLocked drops every key with no live events. Callers must hold l.mu.
+func (l *SlidingWindow) pruneLocked(now time.Time) {
+	l.lastPrune = now
+	for key := range l.hits {
+		if live := l.liveLocked(key, now); len(live) > 0 {
+			l.hits[key] = live
+		} else {
 			delete(l.hits, key)
-			continue
-		}
-		l.hits[key] = live
-	}
-}
-
-// RunCleanup runs Cleanup every interval until done is closed.
-func (l *SlidingWindow) RunCleanup(interval time.Duration, done <-chan struct{}) {
-	if !l.Enabled() {
-		return
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-done:
-			return
-		case <-ticker.C:
-			l.Cleanup()
 		}
 	}
 }

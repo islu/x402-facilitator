@@ -28,12 +28,12 @@ func (s *Service) CheckBalances(ctx context.Context) []wallet.Balance {
 
 		s.metrics.SetGauge(metricBalance, telemetry.Labels{"network": network}, balance.Whole())
 
-		if balance.Below(s.cfg.MinBalance) {
+		if balance.Below(s.cfg.MinBalance[network]) {
 			s.logger.WarnContext(ctx, "settlement wallet balance is low",
 				"network", network,
 				"address", balance.Address,
 				"balance", balance.Whole(),
-				"threshold_atomic", s.cfg.MinBalance.String(),
+				"threshold_atomic", s.cfg.MinBalance[network].String(),
 			)
 		} else {
 			s.logger.DebugContext(ctx, "settlement wallet balance",

@@ -18,9 +18,10 @@ const (
 
 // Config holds the thresholds the wallet use cases work against.
 type Config struct {
-	// MinBalance is the atomic-unit threshold below which a wallet is reported
-	// as low. Nil disables the warning.
-	MinBalance *big.Int
+	// MinBalance is the threshold below which a network's wallet is reported
+	// as low, in that chain's atomic unit (wei, lamports). A network without
+	// one is never warned about.
+	MinBalance map[string]*big.Int
 }
 
 type Service struct {

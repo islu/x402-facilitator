@@ -66,3 +66,17 @@ func (mr *MockLimiterMockRecorder) Enabled() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Enabled", reflect.TypeOf((*MockLimiter)(nil).Enabled))
 }
+
+// Exceeded mocks base method.
+func (m *MockLimiter) Exceeded(key string) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Exceeded", key)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// Exceeded indicates an expected call of Exceeded.
+func (mr *MockLimiterMockRecorder) Exceeded(key any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Exceeded", reflect.TypeOf((*MockLimiter)(nil).Exceeded), key)
+}
