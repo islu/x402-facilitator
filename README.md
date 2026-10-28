@@ -38,9 +38,12 @@ Schemes registered per configured network:
 
 ## Quick start
 
-The toolchain is pinned with [devbox](https://www.jetify.com/devbox) (Go,
-golangci-lint, go-task) — `devbox shell` gets you the same versions CI uses. Any
-Go 1.24+ toolchain works too; devbox is a convenience, not a requirement.
+The dev tools are pinned with [devbox](https://www.jetify.com/devbox) (Go,
+golangci-lint, go-task, govulncheck) — `devbox shell`, then run everything
+through `task`. wire and mockgen are pinned in go.mod's `tool` block and run
+with `go tool`. Any Go 1.21+ toolchain works too; it downloads the version
+go.mod requires. The Docker image may build with a newer patch release than
+devbox has packaged — `task vulncheck` scans against the image's version.
 
 ```bash
 devbox shell            # or bring your own Go toolchain
@@ -276,9 +279,9 @@ task generate      # wire + mockgen
 task docker:build  # container image
 ```
 
-`devbox run check` runs the same thing inside the pinned toolchain. Note that
-devbox sets `GOPATH=$PWD/.go`, so its first run downloads dependencies into the
-project directory (git-ignored) rather than reusing the global module cache.
+Run them from a `devbox shell` to get the pinned golangci-lint. Note that devbox
+sets `GOPATH=$PWD/.go`, so its first run downloads dependencies into the project
+directory (git-ignored) rather than reusing the global module cache.
 
 Tests are table-driven and use testify. They run without a network: the use
 cases drive a mocked `Processor` port (`task mockgen` regenerates the mocks from

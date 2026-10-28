@@ -1,25 +1,18 @@
 {
   "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.17.5/.schema/devbox.schema.json",
   "packages": [
-    "go@1.26.5",
-    "golangci-lint@2.11.3",
-    "go-task@3.45.5"
+    "go@1.27.1",
+    "golangci-lint@2.14.0",
+    "go-task@3.53.1",
+    "govulncheck@1.8.0"
   ],
   "env": {
-    "GOPATH": "$PWD/.go",
+    "GOPATH":               "$PWD/.go",
     "DEVBOX_SHELL_ENABLED": "1"
   },
   "shell": {
     "init_hook": [
       "export PATH=$PATH:$PWD/.go/bin"
-    ],
-    "scripts": {
-      "build": "task build",
-      "run": "task run",
-      "test": "task test",
-      "lint": "task lint",
-      "generate": "task generate",
-      "check": "task check"
-    }
+    ]
   }
 }
