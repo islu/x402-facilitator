@@ -27,7 +27,7 @@ const settlementRetention = 10 * time.Minute
 //
 // ponytail: in-process memory. Retries routed to another replica, or arriving
 // after a restart, are not deduplicated; the on-chain nonce still prevents a
-// double charge. Back this with a shared store (see BACKLOG.md, settlement
+// double charge. Back this with a durable shared store (the planned settlement
 // ledger) when running more than one replica.
 type settlementLog struct {
 	retention time.Duration

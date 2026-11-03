@@ -225,8 +225,9 @@ flight, or — once a transaction was broadcast — gets the recorded outcome fo
 **Scaling.** Instances are stateless apart from three things, all in-process:
 nonces are serialized per process, so **each replica needs its own settlement
 wallet**; the rate limiters need a shared store for a cluster-wide limit; and
-the settlement log only deduplicates retries that reach the same replica. See
-[BACKLOG.md](BACKLOG.md).
+the settlement log only deduplicates retries that reach the same replica. A
+durable, shared settlement ledger is planned for v0.2.0 (see
+[CONTRIBUTING.md](CONTRIBUTING.md#releases)).
 
 **Timeouts.** Verification is a signature check; settlement waits on block
 inclusion. `RECEIPT_TIMEOUT` must stay below `SETTLE_TIMEOUT`, which is enforced
@@ -293,6 +294,29 @@ registry.
 Verifying against a real chain needs testnet funds; point `EVM_RPC_URLS` at Base
 Sepolia and drive it with the
 [x402 Go client](https://github.com/x402-foundation/x402/blob/main/go/CLIENT.md).
+
+## Support and services
+
+The facilitator is free and open source, and will stay that way: everything
+needed to run one deployment safely — settlement, the ledger, recovery, key
+management — lives in this repository.
+
+For stablecoin issuers and chains bringing x402 to their ecosystem, we also
+offer:
+
+- **Managed operation** — we run the facilitator for your network: gas, on-call,
+  upgrades and incident response, under an SLA.
+- **Onboarding** — a new chain or stablecoin brought live, with a conformance
+  report covering verification, settlement, duplicate and timeout handling.
+- **Support contracts** — response-time commitments, security notifications and
+  architecture review.
+
+Contact the maintainer through [GitHub](https://github.com/islu).
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as
+described in [SECURITY.md](SECURITY.md) — never in a public issue.
 
 ## License
 

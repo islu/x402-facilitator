@@ -1,8 +1,10 @@
 # x402-facilitator
 
-Architecture, configuration and API: README.md. Planned work and its intended
-design: BACKLOG.md — read the item before starting one, and add to it when you
-defer something.
+Architecture, configuration and API: README.md. Contribution, merge and
+release rules: CONTRIBUTING.md. Planned work and its intended design:
+BACKLOG.md, a maintainer-local file (git-ignored, absent in clones) — when it
+exists, read the item before starting one and add to it when you defer
+something. Public files never link to it.
 
 ## Layering
 
