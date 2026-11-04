@@ -17,6 +17,11 @@ Client ──▶ Resource Server ──▶ Facilitator ──▶ Network
 Built on [`github.com/x402-foundation/x402/go/v2`](https://github.com/x402-foundation/x402/tree/main/go),
 following the structure in the SDK's [FACILITATOR.md](https://github.com/x402-foundation/x402/blob/main/go/FACILITATOR.md).
 
+> **Status: v0.x — for testnets and limited pilots.** Settlement deduplication
+> is in-process and there is no durable ledger yet, so do not put significant
+> funds behind it. What each version adds before 1.0 is in
+> [CONTRIBUTING.md](CONTRIBUTING.md#releases).
+
 ## What's included
 
 | Capability | Where |

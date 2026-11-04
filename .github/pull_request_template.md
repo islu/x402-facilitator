@@ -17,7 +17,6 @@ Tick what applies; delete sections that do not. Details:
 - [ ] `task generate` leaves no diff
 - [ ] New behavior has a test; a bug fix has the test that fails without it
 - [ ] No private keys, API-keyed RPC URLs or filled-in `.env`
-- [ ] User-facing changes are under *Unreleased* in `CHANGELOG.md`
 - [ ] The README matches the change
 
 ### Configuration or dependency changes

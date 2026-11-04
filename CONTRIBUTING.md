@@ -60,8 +60,6 @@ re-runs `task check`.
       Tests run without a network.
 - [ ] No private keys, API-keyed RPC URLs or filled-in `.env` anywhere in the
       diff or history.
-- [ ] User-facing changes have an entry under *Unreleased* in
-      [CHANGELOG.md](CHANGELOG.md).
 - [ ] The README matches the change in behavior and configuration.
 
 ### Configuration or dependency changes
@@ -90,8 +88,10 @@ of disclosure.
 
 ## Releases
 
-A version is tagged only when every requirement of its milestone is met and the
-*Unreleased* section of [CHANGELOG.md](CHANGELOG.md) has been moved under it.
+A version is tagged only when every requirement of its milestone is met. Each
+tag gets a [GitHub release](https://github.com/islu/x402-facilitator/releases)
+whose notes open with the highlights and any upgrade steps — settings to
+change, behavior that differs — above the generated list of changes.
 
 **Versioning.** Before 1.0, a minor release may change configuration
 incompatibly — always with a boot failure that names the replacement setting —
