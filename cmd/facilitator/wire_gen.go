@@ -32,7 +32,7 @@ func initializeApp(ctx context.Context, cfg *config.Config) (*App, func(), error
 	if err != nil {
 		return nil, nil, err
 	}
-	svmSigners, err := svm.ProvideSigners(cfg)
+	svmSigners, err := svm.ProvideSigners(ctx, cfg)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
