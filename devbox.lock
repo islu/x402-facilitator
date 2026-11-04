@@ -1,6 +1,44 @@
 {
   "lockfile_version": "1",
   "packages": {
+    "foundry@1.8.4": {
+      "last_modified": "2026-10-05T00:52:30Z",
+      "resolved": "github:NixOS/nixpkgs/8c6b39505383e6d5dcb431f00cb3597b71f8045c#foundry",
+      "source": "devbox-search",
+      "version": "1.8.4",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/k4c155c6w7y36qdjrv67kwf94xwmrd63-foundry-1.8.4",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/k4c155c6w7y36qdjrv67kwf94xwmrd63-foundry-1.8.4"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/73jmzd9k6vdjqpr0bnqbprah9njxg2ix-foundry-1.8.4",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/73jmzd9k6vdjqpr0bnqbprah9njxg2ix-foundry-1.8.4"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/d3cic2wyabwlhhfr38ziqxfz8xyrr8am-foundry-1.8.4",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/d3cic2wyabwlhhfr38ziqxfz8xyrr8am-foundry-1.8.4"
+        }
+      }
+    },
     "github:NixOS/nixpkgs/nixpkgs-unstable": {
       "last_modified": "2026-07-20T13:48:30Z",
       "resolved": "github:NixOS/nixpkgs/421eebfd0ec7bccd4abe826ce62d7e6e83129493?lastModified=1784555310&narHash=sha256-%2FFCliTPgiuV1owejZFNx3Ch9irdvkOfOFl%2BHHZ%2BDrtM%3D"
@@ -154,6 +192,54 @@
             }
           ],
           "store_path": "/nix/store/9jbh8q27fl90281r4l3prpjvjy5ylqj0-govulncheck-1.8.0"
+        }
+      }
+    },
+    "solc@0.8.33": {
+      "last_modified": "2026-10-02T22:55:44Z",
+      "resolved": "github:NixOS/nixpkgs/55ba7f49ef2962b42cbd126522b7df5f95037679#solc",
+      "source": "devbox-search",
+      "version": "0.8.33",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/pc5f51f0iqdxqbcggqnhbb0py19i063a-solc-0.8.33",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/pc5f51f0iqdxqbcggqnhbb0py19i063a-solc-0.8.33"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/fslbflb0adi3yvxqqbp33ri1gv9qmip2-solc-0.8.33",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/fslbflb0adi3yvxqqbp33ri1gv9qmip2-solc-0.8.33"
+        },
+        "x86_64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/223vpy2zlyswyf66zns2x7a1bdw04cfv-solc-0.8.33",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/223vpy2zlyswyf66zns2x7a1bdw04cfv-solc-0.8.33"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/i8xwyfyynbmpnkmggnsixy8ppmlp3wa9-solc-0.8.33",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/i8xwyfyynbmpnkmggnsixy8ppmlp3wa9-solc-0.8.33"
         }
       }
     }

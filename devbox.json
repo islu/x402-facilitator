@@ -3,7 +3,9 @@
     "go@1.27.1",
     "golangci-lint@2.14.0",
     "go-task@3.53.1",
-    "govulncheck@1.8.0"
+    "govulncheck@1.8.0",
+    "foundry@1.8.4",
+    "solc@0.8.33"
   ],
   "env": {
     "GOPATH":               "$PWD/.go",

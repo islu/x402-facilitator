@@ -78,8 +78,11 @@ ledger):
       transaction hash the caller sees on failure.
 - [ ] Protocol response shapes and metric names are unchanged, or the change is
       called out as breaking.
-- [ ] Until the e2e suite exists: a manual run on a testnet (verify → settle →
-      duplicate settle) with the transaction hashes in the description.
+- [ ] `task e2e` passes, and the change's behavior on a chain is covered there
+      (the suite runs on a local anvil chain).
+- [ ] A change to how transactions are built or sent (gas, fees, nonces, RPC
+      handling) also gets a manual testnet run (verify → settle → duplicate
+      settle) with the transaction hashes in the description.
 - [ ] Reviewed by a maintainer other than the author when one is available;
       a solo maintainer waits a day and re-reads the diff before merging.
 
@@ -122,7 +125,7 @@ and a tight `ALLOWED_ASSETS`.
 - Several RPC endpoints per network with failover, and a readiness check based
   on endpoint health.
 - `ALLOWED_ASSETS` is required in production mode.
-- An end-to-end suite runs the full flow against an EVM fork (`task e2e`).
+- The end-to-end suite (`task e2e`) covers the ledger and settlement recovery.
 - A minimal runbook: refilling gas, rotating keys, rolling back.
 - The settlement path has had a security review, with findings fixed or
   recorded.

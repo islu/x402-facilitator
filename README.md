@@ -271,6 +271,7 @@ internal/transport/http/
   handler/                  protocol + system endpoints
   middleware/ response/     logging, recovery, response shapes
 internal/mocks/domain/      generated port mocks (mockgen)
+test/e2e/                   end-to-end suite against a local anvil chain
 ```
 
 ## Development
@@ -281,6 +282,7 @@ Tasks are defined in [Taskfile.yml](Taskfile.yml); `task` alone lists them.
 task check         # fmt + vet + lint + test
 task test:race     # tests under the race detector
 task test:cover    # coverage summary
+task e2e           # end-to-end suite on a local chain
 task generate      # wire + mockgen
 task docker:build  # container image
 ```
@@ -296,8 +298,15 @@ port path, and the rest cover config validation, document parsing, the
 settlement ceiling, error translation, EIP-712 verification and the metrics
 registry.
 
-Verifying against a real chain needs testnet funds; point `EVM_RPC_URLS` at Base
-Sepolia and drive it with the
+`task e2e` runs the built binary against a local [anvil](https://getfoundry.sh)
+chain with an EIP-3009 token compiled from `test/e2e/testdata`: verify, settle,
+concurrent and repeated settles of one payment, policy rejections that must not
+spend gas, and a stuck transaction (automine off) that must be cancelled at the
+same nonce. Each test starts its own chain and generates its own keys, so it
+needs no funds and no network. anvil and solc come with the devbox environment.
+
+Verifying against a public chain needs testnet funds; point `EVM_RPC_URLS` at
+Base Sepolia and drive it with the
 [x402 Go client](https://github.com/x402-foundation/x402/blob/main/go/CLIENT.md).
 
 ## Support and services

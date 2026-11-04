@@ -29,4 +29,5 @@ Tick what applies; delete sections that do not. Details:
 - [ ] What a retry of the same payment does:
 - [ ] Which transaction hash the caller sees on failure:
 - [ ] Protocol response shapes and metric names unchanged, or called out as breaking
-- [ ] Testnet run (verify → settle → duplicate settle), transaction hashes:
+- [ ] `task e2e` passes and covers the change
+- [ ] If transaction building or sending changed — testnet run (verify → settle → duplicate settle), transaction hashes:

@@ -1,5 +1,9 @@
 version: "2"
 
+run:
+  build-tags:
+    - e2e # lint the end-to-end suite too
+
 linters:
   default: standard
   enable:
