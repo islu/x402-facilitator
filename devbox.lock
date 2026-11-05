@@ -195,6 +195,54 @@
         }
       }
     },
+    "solana-cli@4.0.3": {
+      "last_modified": "2026-10-02T22:55:44Z",
+      "resolved": "github:NixOS/nixpkgs/55ba7f49ef2962b42cbd126522b7df5f95037679#solana-cli",
+      "source": "devbox-search",
+      "version": "4.0.3",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/28377a6wc4ap8r692xvkmbnj69vsdk4w-solana-cli-4.0.3",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/28377a6wc4ap8r692xvkmbnj69vsdk4w-solana-cli-4.0.3"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/vj47fni30kanf38l3bvi3b403jsc8f9p-solana-cli-4.0.3",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/vj47fni30kanf38l3bvi3b403jsc8f9p-solana-cli-4.0.3"
+        },
+        "x86_64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/kjysbrl3c4apxrblj7ggy7j5axc2fy6j-solana-cli-4.0.3",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/kjysbrl3c4apxrblj7ggy7j5axc2fy6j-solana-cli-4.0.3"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/qp25wkqsax2n8wbr1fkb4hl356124jbb-solana-cli-4.0.3",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/qp25wkqsax2n8wbr1fkb4hl356124jbb-solana-cli-4.0.3"
+        }
+      }
+    },
     "solc@0.8.33": {
       "last_modified": "2026-10-02T22:55:44Z",
       "resolved": "github:NixOS/nixpkgs/55ba7f49ef2962b42cbd126522b7df5f95037679#solc",

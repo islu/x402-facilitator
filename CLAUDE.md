@@ -36,9 +36,11 @@ retry of the same payment does and which transaction hash the caller sees on
 failure. The on-chain nonce prevents a double charge; the facilitator's job is
 to never pay gas twice and never report a charged payer as unpaid.
 
-Such a change also gets a case in `test/e2e` (anvil, behind the `e2e` build
-tag; run with `task e2e`) that asserts on chain state — wallet nonce, token
-balances, authorization state — not only on the HTTP response.
+Such a change also gets a case in `test/e2e` (anvil for EVM,
+solana-test-validator for Solana; behind the `e2e` build tag, run with
+`task e2e`) that asserts on chain state — wallet nonce or fee-payer
+transactions, token balances, authorization state — not only on the HTTP
+response.
 
 ## Conventions
 

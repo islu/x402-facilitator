@@ -271,7 +271,7 @@ internal/transport/http/
   handler/                  protocol + system endpoints
   middleware/ response/     logging, recovery, response shapes
 internal/mocks/domain/      generated port mocks (mockgen)
-test/e2e/                   end-to-end suite against a local anvil chain
+test/e2e/                   end-to-end suite on local EVM and Solana chains
 ```
 
 ## Development
@@ -298,12 +298,22 @@ port path, and the rest cover config validation, document parsing, the
 settlement ceiling, error translation, EIP-712 verification and the metrics
 registry.
 
-`task e2e` runs the built binary against a local [anvil](https://getfoundry.sh)
-chain with an EIP-3009 token compiled from `test/e2e/testdata`: verify, settle,
-concurrent and repeated settles of one payment, policy rejections that must not
-spend gas, and a stuck transaction (automine off) that must be cancelled at the
-same nonce. Each test starts its own chain and generates its own keys, so it
-needs no funds and no network. anvil and solc come with the devbox environment.
+`task e2e` runs the built binary against local chains and checks the outcome on
+chain — wallet nonce or fee-payer transactions, token balances, authorization
+state:
+
+- EVM, on [anvil](https://getfoundry.sh) with an EIP-3009 token compiled from
+  `test/e2e/testdata`: verify, settle, concurrent and repeated settles of one
+  payment, policy rejections that must not spend gas, and a stuck transaction
+  (automine off) that must be cancelled at the same nonce.
+- Solana, on `solana-test-validator` with a fresh SPL mint: verify, settle,
+  concurrent and repeated settles, and policy rejections. Its setup waits for
+  finality (about 13 seconds per test), since the x402 client reads at
+  finalized commitment.
+
+Each test starts its own chain and generates its own keys, so the suite needs
+no funds and no network. anvil, solc and solana-test-validator come with the
+devbox environment.
 
 Verifying against a public chain needs testnet funds; point `EVM_RPC_URLS` at
 Base Sepolia and drive it with the

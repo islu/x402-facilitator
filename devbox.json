@@ -5,7 +5,8 @@
     "go-task@3.53.1",
     "govulncheck@1.8.0",
     "foundry@1.8.4",
-    "solc@0.8.33"
+    "solc@0.8.33",
+    "solana-cli@4.0.3"
   ],
   "env": {
     "GOPATH":               "$PWD/.go",

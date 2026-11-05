@@ -79,7 +79,7 @@ ledger):
 - [ ] Protocol response shapes and metric names are unchanged, or the change is
       called out as breaking.
 - [ ] `task e2e` passes, and the change's behavior on a chain is covered there
-      (the suite runs on a local anvil chain).
+      (the suite runs on local anvil and Solana test validator chains).
 - [ ] A change to how transactions are built or sent (gas, fees, nonces, RPC
       handling) also gets a manual testnet run (verify → settle → duplicate
       settle) with the transaction hashes in the description.
