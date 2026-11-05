@@ -19,7 +19,7 @@ following the structure in the SDK's [FACILITATOR.md](https://github.com/x402-fo
 
 > **Status: v0.x — for testnets and limited pilots.** Settlement deduplication
 > is in-process and there is no durable ledger yet, so do not put significant
-> funds behind it. What each version adds before 1.0 is in
+> funds behind it. Versioning and compatibility before and after 1.0:
 > [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
 ## What's included
@@ -231,8 +231,7 @@ flight, or — once a transaction was broadcast — gets the recorded outcome fo
 nonces are serialized per process, so **each replica needs its own settlement
 wallet**; the rate limiters need a shared store for a cluster-wide limit; and
 the settlement log only deduplicates retries that reach the same replica. A
-durable, shared settlement ledger is planned for v0.2.0 (see
-[CONTRIBUTING.md](CONTRIBUTING.md#releases)).
+durable, shared settlement ledger is planned.
 
 **Timeouts.** Verification is a signature check; settlement waits on block
 inclusion. `RECEIPT_TIMEOUT` must stay below `SETTLE_TIMEOUT`, which is enforced

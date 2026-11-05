@@ -17,9 +17,10 @@ vulnerability. Include what you can of:
   private keys),
 - steps to reproduce, and the impact you observed or expect.
 
-We aim to acknowledge a report within 3 business days and to agree a fix and
-disclosure timeline with you after triage. We credit reporters in the advisory
-unless you ask us not to.
+The project has a single maintainer, so handling is best effort: expect an
+acknowledgement within two weeks, and a reminder on the advisory is welcome if
+you hear nothing by then. After triage we agree a fix and disclosure timeline
+with you. We credit reporters in the advisory unless you ask us not to.
 
 ## Supported versions
 

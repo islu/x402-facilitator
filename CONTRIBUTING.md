@@ -9,8 +9,7 @@ before features, and every change that touches settlement needs a test.
 - **Bugs and small fixes**: open a pull request directly, or an issue if you
   want to discuss first.
 - **New features, chains or schemes**: open an issue first, so the design can be
-  agreed before you write it. The [release milestones](#releases) show what is
-  already planned.
+  agreed before you write it.
 
 ## Setup
 
@@ -91,63 +90,17 @@ of disclosure.
 
 ## Releases
 
-A version is tagged only when every requirement of its milestone is met. Each
-tag gets a [GitHub release](https://github.com/islu/x402-facilitator/releases)
-whose notes open with the highlights and any upgrade steps — settings to
-change, behavior that differs — above the generated list of changes.
+A version is tagged when its planned scope is done and `task check` and
+`task e2e` pass. Each tag gets a
+[GitHub release](https://github.com/islu/x402-facilitator/releases) whose notes
+open with the highlights and any upgrade steps — settings to change, behavior
+that differs — above the generated list of changes.
 
 **Versioning.** Before 1.0, a minor release may change configuration
 incompatibly — always with a boot failure that names the replacement setting —
 and a patch release only fixes bugs. From 1.0, the project follows semantic
 versioning strictly: an incompatible change to configuration or the HTTP API
 needs a major release.
-
-### v0.1.0 — evaluation (testnets)
-
-For developers and operators trying the facilitator. Not for real funds.
-
-- Solana networks are checked against their RPC endpoint at startup, as EVM
-  networks already are.
-- A manual Base Sepolia run of verify → settle → duplicate settle → stuck
-  transaction cancellation, recorded with transaction hashes.
-- GitHub private vulnerability reporting is enabled.
-- The README states that v0.x is for testnets and limited pilots.
-
-### v0.2.0 — limited mainnet pilots
-
-For mainnet operation with low exposure: a dedicated wallet, a small balance,
-and a tight `ALLOWED_ASSETS`.
-
-- A durable settlement ledger (Postgres), with a query and export interface on
-  the admin port.
-- Recovery of settlements that confirm after a timeout, aligned with the
-  upstream `settlement_pending` semantics, including after a restart.
-- Several RPC endpoints per network with failover, and a readiness check based
-  on endpoint health.
-- `ALLOWED_ASSETS` is required in production mode.
-- The end-to-end suite (`task e2e`) covers the ledger and settlement recovery.
-- A minimal runbook: refilling gas, rotating keys, rolling back.
-- The settlement path has had a security review, with findings fixed or
-  recorded.
-
-### v1.0.0 — production
-
-- 30 consecutive days of production operation with zero duplicate settlements
-  and zero unrecorded settlements, with success-rate and confirmation-latency
-  data.
-- Stuck transactions are sped up rather than cancelled, and the response
-  reports the hash that actually landed.
-- Per-network settings (receipt timeout, gas, fee cap) and a startup check of
-  every allowed token.
-- The conformance suite covers EVM and Solana and produces a report.
-- Signing through a KMS, with AWS KMS supported.
-- A screening (KYT / sanctions) port with at least one provider adapter.
-- A deployment package (Helm chart, docker-compose with dashboards) and
-  per-network SLA metrics.
-- CI builds release images reproducibly and scans them for vulnerabilities.
-- An external security review of the signing and settlement paths.
-- The configuration and HTTP API documented in the README become a
-  compatibility commitment.
 
 ## License
 
