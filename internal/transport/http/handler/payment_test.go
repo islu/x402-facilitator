@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -57,7 +56,7 @@ type testServer struct {
 
 func newTestServer(ctrl *gomock.Controller, clients ratelimit.Limiter) testServer {
 	processor := mocks.NewMockProcessor(ctrl)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	registry := telemetry.New()
 
 	service := apppayment.NewService(processor, disabledLimiter{}, registry, payment.Policy{}, logger)
@@ -98,7 +97,7 @@ func post(t *testing.T, handler http.Handler, path, body string) *httptest.Respo
 func get(t *testing.T, handler http.Handler, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, http.NoBody))
 	return rec
 }
 
@@ -305,7 +304,7 @@ func Test_Verify_ForwardsDocumentsVerbatim(t *testing.T) {
 
 	var forwarded map[string]any
 	require.NoError(t, json.Unmarshal(seen.Payload, &forwarded))
-	assert.Equal(t, float64(2), forwarded["x402Version"])
+	assert.InDelta(t, 2, forwarded["x402Version"], 0)
 	assert.Contains(t, forwarded, "payload")
 }
 

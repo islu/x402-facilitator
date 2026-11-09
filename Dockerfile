@@ -1,4 +1,6 @@
-FROM golang:1.27.3-alpine AS build
+# The build stage runs on the builder's own platform and cross-compiles, so a
+# multi-arch build needs no emulation.
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS build
 
 WORKDIR /src
 
@@ -7,7 +9,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/facilitator ./cmd/facilitator
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/facilitator ./cmd/facilitator
 
 FROM gcr.io/distroless/static-debian12:nonroot
 

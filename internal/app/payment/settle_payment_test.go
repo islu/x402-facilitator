@@ -134,7 +134,7 @@ func Test_SettlePayment(t *testing.T) {
 			deps.metrics = metrics
 			tt.setup(&deps)
 
-			result, err := newService(deps).SettlePayment(context.Background(), evmRequest(t, testPayer, tt.amount))
+			result, err := newService(deps).SettlePayment(context.Background(), evmRequest(t, tt.amount))
 
 			switch {
 			case tt.wantErr != nil:
@@ -162,9 +162,9 @@ func Test_SettlePayment(t *testing.T) {
 	}
 }
 
-func ceilingPolicy(max int64) payment.Policy {
+func ceilingPolicy(ceiling int64) payment.Policy {
 	return payment.Policy{Assets: map[string]payment.AssetLimit{
-		payment.AssetKey(testNetwork, testAsset): {Max: big.NewInt(max)},
+		payment.AssetKey(testNetwork, testAsset): {Max: big.NewInt(ceiling)},
 	}}
 }
 
@@ -216,7 +216,7 @@ func Test_SettlePayment_Idempotent(t *testing.T) {
 				}).
 				AnyTimes()
 			svc := newService(deps)
-			req := evmRequest(t, testPayer, "1000")
+			req := evmRequest(t, "1000")
 			// Same document, different whitespace: a retry that re-serialized it.
 			retry := payment.Request{Payload: append([]byte(" "), req.Payload...), Requirements: req.Requirements}
 
@@ -247,7 +247,7 @@ func Test_SettlePayment_ConcurrentDuplicateJoinsInFlight(t *testing.T) {
 		}).
 		Times(1)
 	svc := newService(deps)
-	req := evmRequest(t, testPayer, "1000")
+	req := evmRequest(t, "1000")
 
 	leader := make(chan payment.SettleResult)
 	go func() {

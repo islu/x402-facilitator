@@ -9,6 +9,7 @@ package svm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -177,7 +178,7 @@ func (s *Signer) SendTransaction(ctx context.Context, tx *solana.Transaction, _ 
 // ConfirmTransaction polls until the transaction reaches the configured
 // commitment level, fails on-chain, or the attempt budget is exhausted.
 func (s *Signer) ConfirmTransaction(ctx context.Context, signature solana.Signature, _ string) error {
-	for attempt := 0; attempt < s.cfg.ConfirmAttempts; attempt++ {
+	for range s.cfg.ConfirmAttempts {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -211,7 +212,7 @@ func (s *Signer) Balance(ctx context.Context) (wallet.Balance, error) {
 		return wallet.Balance{}, fmt.Errorf("read SOL balance: %w", err)
 	}
 	if result == nil {
-		return wallet.Balance{}, fmt.Errorf("empty balance response")
+		return wallet.Balance{}, errors.New("empty balance response")
 	}
 
 	return wallet.Balance{

@@ -1,0 +1,22 @@
+name: Feature request
+description: Ask for a feature, including one the README lists as not planned.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The project is in maintenance mode (see the README's Roadmap). A concrete
+        use case is what moves a "not planned" item forward.
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What you run, at what volume, and what fails or is missing today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would solve it

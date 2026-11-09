@@ -124,7 +124,7 @@ var v1Aliases = map[string]string{
 //
 // Returns an error describing every problem found, so a misconfigured
 // deployment fails at startup rather than on the first payment.
-func Load() (*Config, error) {
+func Load() (*Config, error) { //nolint:gocognit // a flat list of settings, each with its own error check
 	cfg := &Config{
 		Port:                    envString("PORT", "4022"),
 		AdminPort:               envString("ADMIN_PORT", "9090"),
@@ -365,7 +365,7 @@ func parseNetworkMap(name string) (map[string]string, error) {
 	if raw == "" {
 		return out, nil
 	}
-	for _, entry := range strings.Split(raw, ",") {
+	for entry := range strings.SplitSeq(raw, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
@@ -397,7 +397,7 @@ func sortedKeys(m map[string]string) []string {
 
 func splitList(raw string) []string {
 	var out []string
-	for _, item := range strings.Split(raw, ",") {
+	for item := range strings.SplitSeq(raw, ",") {
 		if item = strings.TrimSpace(item); item != "" {
 			out = append(out, item)
 		}

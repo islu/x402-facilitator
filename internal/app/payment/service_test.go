@@ -2,7 +2,6 @@ package payment
 
 import (
 	"encoding/json"
-	"io"
 	"log/slog"
 	"maps"
 	"slices"
@@ -40,7 +39,7 @@ func newServiceDeps(ctrl *gomock.Controller) serviceDeps {
 		limiter:   disabledLimiter{},
 		metrics:   discardRecorder{},
 		policy:    payment.Policy{},
-		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		logger:    slog.New(slog.DiscardHandler),
 	}
 }
 
@@ -55,8 +54,8 @@ func newService(deps serviceDeps) *Service {
 	}
 }
 
-// evmRequest builds a v2 EVM exact payment for the given payer and amount.
-func evmRequest(t *testing.T, payer, amount string) payment.Request {
+// evmRequest builds a v2 EVM exact payment from testPayer for the given amount.
+func evmRequest(t *testing.T, amount string) payment.Request {
 	t.Helper()
 
 	payload, err := json.Marshal(map[string]any{
@@ -69,7 +68,7 @@ func evmRequest(t *testing.T, payer, amount string) payment.Request {
 		},
 		"payload": map[string]any{
 			"signature":     "0xsig",
-			"authorization": map[string]any{"from": payer},
+			"authorization": map[string]any{"from": testPayer},
 		},
 	})
 	if err != nil {

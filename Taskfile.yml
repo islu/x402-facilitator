@@ -48,7 +48,7 @@ tasks:
   fmt:
     desc: Format the code
     cmds:
-      - go fmt ./...
+      - golangci-lint fmt ./...
 
   vet:
     desc: Run go vet
@@ -66,7 +66,7 @@ tasks:
       # devbox's Go can trail the Dockerfile's golang image by a patch release;
       # scan the stdlib that is actually built into the image, not the local one.
       TOOLCHAIN:
-        sh: sed -n 's/^FROM golang:\([0-9.]*\)-.*/go\1/p' Dockerfile
+        sh: sed -n 's/^FROM .*golang:\([0-9.]*\)-.*/go\1/p' Dockerfile
     env:
       GOTOOLCHAIN: "{{.TOOLCHAIN}}"
     cmds:

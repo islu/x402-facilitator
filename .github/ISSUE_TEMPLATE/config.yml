@@ -1,0 +1,6 @@
+# Blank issues stay open for questions.
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/islu/x402-facilitator/security/advisories/new
+    about: Privately, never in a public issue.

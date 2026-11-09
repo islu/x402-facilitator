@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so a newly published vulnerability or an upstream break shows up
+    # without waiting for the next commit.
+    - cron: "17 2 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every job runs inside devbox, so CI uses the same pinned tools as a local
+# `devbox shell`. Actions are pinned to commit SHAs; Dependabot updates them.
+jobs:
+  check:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jetify-com/devbox-install-action@05e954310554b6122a26b4880d69937f61b1eb2e # v0.16.0
+        with:
+          enable-cache: true
+          devbox-version: 0.17.5
+      - run: devbox run -- task check
+      - run: devbox run -- task test:race
+      - run: devbox run -- task generate
+      - name: Formatting and generated code are committed
+        run: git diff --exit-code
+
+  e2e:
+    name: End-to-end (anvil, Solana test validator)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jetify-com/devbox-install-action@05e954310554b6122a26b4880d69937f61b1eb2e # v0.16.0
+        with:
+          enable-cache: true
+          devbox-version: 0.17.5
+      - run: devbox run -- task e2e
+
+  vulncheck:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jetify-com/devbox-install-action@05e954310554b6122a26b4880d69937f61b1eb2e # v0.16.0
+        with:
+          enable-cache: true
+          devbox-version: 0.17.5
+      # Scans against the Go version in the Dockerfile, not devbox's.
+      - run: devbox run -- task vulncheck
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Catches a Dependabot base-image bump that breaks the build before a
+      # release does; the release workflow builds the same Dockerfile.
+      - run: docker build -t x402-facilitator:ci .
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate

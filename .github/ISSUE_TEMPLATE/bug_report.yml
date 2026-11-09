@@ -1,0 +1,54 @@
+name: Bug report
+description: Something behaves differently from the README.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security issues do not go here** — report them privately as described in SECURITY.md.
+        Never paste private keys, RPC URLs with API keys, or a filled-in `.env`.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release tag, image tag, or commit.
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: network
+    attributes:
+      label: Network and scheme
+      placeholder: eip155:84532, exact
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The request, the response you got, and what you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: Settings involved, with keys and RPC URLs removed.
+      render: shell
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Facilitator log lines around the failure, with secrets removed.
+      render: text
+
+  - type: input
+    id: tx
+    attributes:
+      label: Transaction hash
+      description: If a settlement is involved.

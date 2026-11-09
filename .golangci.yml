@@ -1,25 +1,77 @@
 version: "2"
 
+# Only enable linters whose upstream is maintained: not archived, with a push in
+# the last 12 months. Re-check when upgrading golangci-lint (last: 2026-11-09).
+# Dropped for that reason: errorlint (archived), durationcheck, forcetypeassert,
+# nilerr, thelper, tparallel, usestdlibvars; copyloopvar and intrange are
+# covered by modernize.
+
 run:
   build-tags:
     - e2e # lint the end-to-end suite too
 
 linters:
-  default: standard
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
   enable:
+    # ── Bugs ──────────────────────────────────────────────────────────────────
     - bodyclose # an unclosed RPC response body leaks a connection per settlement
-    - errorlint # payment failures are matched with errors.As; broken checks are silent
+    - contextcheck # a request's context must reach the RPC calls it triggers
+    - errchkjson # payment documents are JSON; unchecked encoding errors are silent
+    - exhaustive # a switch over a status enum that misses a case
+    - fatcontext # contexts nested in a loop grow without bound
+    - noctx # HTTP and RPC calls without a context cannot be cancelled
+    - recvcheck # mixed value and pointer receivers
+    - wastedassign
+
+    # ── Security ──────────────────────────────────────────────────────────────
+    - bidichk # trojan-source unicode
     - gosec
+
+    # ── Performance ───────────────────────────────────────────────────────────
+    - perfsprint # fmt.Sprintf where strconv or concatenation will do
+    - prealloc
+
+    # ── Refactoring and style ─────────────────────────────────────────────────
+    - canonicalheader
+    - dupword
+    - errname # ErrX sentinels, XError types
+    - gocognit # functions too complex to review
+    - gocritic # diagnostic, performance and style checks
+    - mirror
     - misspell
+    - modernize # newer language and library features (Go team)
+    - nolintlint # every //nolint names its linter and says why
+    - predeclared # shadowing len, new, error…
     - revive
+    - sloglint
     - unconvert
-    - usestdlibvars
+    - unparam
+
+    # ── Tests ─────────────────────────────────────────────────────────────────
+    - testifylint
+    - usetesting
 
   settings:
+    exhaustive:
+      default-signifies-exhaustive: true
+    gocognit:
+      min-complexity: 30
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        - hugeParam # x402 SDK types are passed by value by design
+        - unnamedResult # (bool, string) reads fine at these call sites
+        - whyNoLint # nolintlint already requires an explanation
     gosec:
       excludes:
         # Integer conversions are audited by hand where they touch chain values.
         - G115
+    nolintlint:
+      require-explanation: true
+      require-specific: true
     revive:
       # An explicit rule list, not revive's defaults: this codebase documents
       # related symbols with one group comment (a Service and its constructor,
@@ -33,17 +85,24 @@ linters:
         - name: unexported-return
         - name: unreachable-code
         - name: var-declaration
+    sloglint:
+      kv-only: true # one style: slog.Info("msg", "key", value)
 
   exclusions:
     rules:
       - path: _test\.go$
         linters:
           - gosec # test fixtures use fixed keys and hard-coded amounts
+          - noctx # go test's timeout bounds every call
       - path: internal/mocks/
         linters:
           - revive # generated
 
 formatters:
   enable:
-    - gofmt
+    - gofumpt
     - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/islu/x402-facilitator

@@ -1,5 +1,10 @@
 # x402-facilitator
 
+[![CI](https://github.com/islu/x402-facilitator/actions/workflows/ci.yml/badge.svg)](https://github.com/islu/x402-facilitator/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/islu/x402-facilitator/actions/workflows/codeql.yml/badge.svg)](https://github.com/islu/x402-facilitator/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/islu/x402-facilitator)](https://github.com/islu/x402-facilitator/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A production-shaped [x402](https://github.com/x402-foundation/x402) payment facilitator in Go.
 
 A facilitator sits between resource servers and the chain: it **verifies** payment
@@ -72,6 +77,16 @@ curl localhost:4022/supported
   "signers": { "eip155": ["0x…"] }
 }
 ```
+
+Or run a released image (amd64 and arm64):
+
+```bash
+docker run --env-file .env -p 4022:4022 ghcr.io/islu/x402-facilitator:0.1
+```
+
+Each image carries an SBOM and a build provenance attestation; check that it was
+built from this repository with
+`gh attestation verify oci://ghcr.io/islu/x402-facilitator:0.1 --owner islu`.
 
 Point a resource server at it:
 
@@ -285,7 +300,19 @@ task generate      # wire + mockgen
 task docker:build  # container image
 ```
 
-Run them from a `devbox shell` to get the pinned golangci-lint. Note that devbox
+The lint configuration ([.golangci.yml](.golangci.yml)) groups its linters by
+bugs, security, performance, refactoring and tests, and enables only linters
+whose upstream is still maintained. `task fmt` applies gofumpt and goimports.
+
+[CI](.github/workflows) runs `task check`, the race detector, `task e2e` and
+`task vulncheck` inside devbox, and builds the Docker image, on every push to
+`main` and every pull request. It also runs
+CodeQL on the Go code and the workflows, and reviews new dependencies on pull
+requests. The CI and CodeQL workflows also run weekly, so a newly published
+vulnerability shows up without a commit. Dependabot keeps Go modules, actions
+and the Docker base image current.
+
+Run the tasks from a `devbox shell` to get the pinned tools. Note that devbox
 sets `GOPATH=$PWD/.go`, so its first run downloads dependencies into the project
 directory (git-ignored) rather than reusing the global module cache.
 

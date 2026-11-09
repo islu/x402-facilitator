@@ -33,7 +33,7 @@ func Test_VerifyPayment(t *testing.T) {
 	}{
 		{
 			name:     "a valid payment is returned with its payer",
-			requests: []payment.Request{evmRequest(t, testPayer, "1000")},
+			requests: []payment.Request{evmRequest(t, "1000")},
 			setup: func(d *serviceDeps) {
 				d.processor.EXPECT().
 					Verify(gomock.Any(), gomock.Any()).
@@ -47,7 +47,7 @@ func Test_VerifyPayment(t *testing.T) {
 		},
 		{
 			name:     "an invalid payment is reported as a verification error",
-			requests: []payment.Request{evmRequest(t, testPayer, "1000")},
+			requests: []payment.Request{evmRequest(t, "1000")},
 			setup: func(d *serviceDeps) {
 				d.processor.EXPECT().
 					Verify(gomock.Any(), gomock.Any()).
@@ -63,7 +63,7 @@ func Test_VerifyPayment(t *testing.T) {
 			// An outage is not a verdict on the payment: counting it as invalid
 			// would make a broken RPC endpoint look like a wave of bad payments.
 			name:     "a system error passes through without counting the payment invalid",
-			requests: []payment.Request{evmRequest(t, testPayer, "1000")},
+			requests: []payment.Request{evmRequest(t, "1000")},
 			setup: func(d *serviceDeps) {
 				d.processor.EXPECT().Verify(gomock.Any(), gomock.Any()).Return(payment.VerifyResult{}, errRPCDown)
 			},
@@ -73,7 +73,7 @@ func Test_VerifyPayment(t *testing.T) {
 			// The resource server must learn a payment will be refused before it
 			// serves the content, not at settlement.
 			name:     "a payment outside the policy is invalid without reaching the processor",
-			requests: []payment.Request{evmRequest(t, testPayer, "1000")},
+			requests: []payment.Request{evmRequest(t, "1000")},
 			setup: func(d *serviceDeps) {
 				d.policy = payment.Policy{Assets: map[string]payment.AssetLimit{
 					payment.AssetKey(testNetwork, "0x000000000000000000000000000000000000dead"): {},
@@ -90,8 +90,8 @@ func Test_VerifyPayment(t *testing.T) {
 			// it must not use up that victim's quota.
 			name: "only verified payments count against the payer quota",
 			requests: []payment.Request{
-				evmRequest(t, testPayer, "1000"),
-				evmRequest(t, testPayer, "1000"),
+				evmRequest(t, "1000"),
+				evmRequest(t, "1000"),
 			},
 			setup: func(d *serviceDeps) {
 				d.limiter = &countingLimiter{remaining: 1}
@@ -105,8 +105,8 @@ func Test_VerifyPayment(t *testing.T) {
 		{
 			name: "a rate limited payer never reaches the processor",
 			requests: []payment.Request{
-				evmRequest(t, testPayer, "1000"),
-				evmRequest(t, testPayer, "1000"),
+				evmRequest(t, "1000"),
+				evmRequest(t, "1000"),
 			},
 			setup: func(d *serviceDeps) {
 				d.limiter = &countingLimiter{remaining: 1}
@@ -184,7 +184,7 @@ func Test_VerifyPayment(t *testing.T) {
 func Test_VerifyPayment_ForwardsDocumentsVerbatim(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	deps := newServiceDeps(ctrl)
-	req := evmRequest(t, testPayer, "1000")
+	req := evmRequest(t, "1000")
 
 	var seen payment.Request
 	deps.processor.EXPECT().

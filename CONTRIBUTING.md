@@ -47,9 +47,12 @@ Use [conventional commit](https://www.conventionalcommits.org/) subjects:
 
 ## Merge criteria
 
-A pull request merges only when every item that applies is true. There is no CI
-yet, so the author confirms each one in the description and the reviewer
-re-runs `task check`.
+A pull request merges only when every item that applies is true.
+[CI](.github/workflows) checks the mechanical ones on every pull request:
+`task check`, the race detector, `task generate` and `task fmt` leaving no
+diff, `task e2e`, `task vulncheck`, the Docker build, CodeQL, and a review of
+new dependencies.
+The author confirms the rest in the description.
 
 ### Every pull request
 
@@ -90,8 +93,10 @@ of disclosure.
 
 ## Releases
 
-A version is tagged when its planned scope is done and `task check` and
-`task e2e` pass. Each tag gets a
+A version is tagged when its planned scope is done and CI passes on `main`.
+Pushing the tag publishes the image to
+`ghcr.io/islu/x402-facilitator` with an SBOM and a build provenance
+attestation. Each tag also gets a
 [GitHub release](https://github.com/islu/x402-facilitator/releases) whose notes
 open with the highlights and any upgrade steps — settings to change, behavior
 that differs — above the generated list of changes.

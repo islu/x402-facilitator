@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"os/exec"
@@ -53,7 +54,7 @@ func compileToken() error {
 	}
 	contract, ok := compiled.Contracts["testdata/TestToken.sol:TestToken"]
 	if !ok {
-		return fmt.Errorf("solc output has no TestToken")
+		return errors.New("solc output has no TestToken")
 	}
 	if tokenABI, err = abi.JSON(bytes.NewReader(contract.ABI)); err != nil {
 		return fmt.Errorf("parse TestToken ABI: %w", err)

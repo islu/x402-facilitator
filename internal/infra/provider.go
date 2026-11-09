@@ -4,6 +4,7 @@
 package infra
 
 import (
+	"maps"
 	"time"
 
 	"github.com/google/wire"
@@ -60,11 +61,7 @@ func ProvideClientLimiter(cfg *config.Config) domainratelimit.ClientLimiter {
 // registry the wallet use cases read balances from.
 func ProvideWalletRegistry(evmSigners evm.Signers, svmSigners svm.Signers) wallet.Registry {
 	registry := wallet.Registry{}
-	for network, reader := range evmSigners.Wallets() {
-		registry[network] = reader
-	}
-	for network, reader := range svmSigners.Wallets() {
-		registry[network] = reader
-	}
+	maps.Copy(registry, evmSigners.Wallets())
+	maps.Copy(registry, svmSigners.Wallets())
 	return registry
 }

@@ -74,8 +74,7 @@ func (h *Handler) Verify(c *gin.Context) {
 
 	result, err := h.payment.VerifyPayment(ctx, req)
 	if err != nil {
-		var invalid *payment.VerificationError
-		if errors.As(err, &invalid) {
+		if invalid, ok := errors.AsType[*payment.VerificationError](err); ok {
 			response.Protocol(c, VerifyResponse{
 				IsValid:        false,
 				InvalidReason:  invalid.Reason,
@@ -112,8 +111,7 @@ func (h *Handler) Settle(c *gin.Context) {
 
 	result, err := h.payment.SettlePayment(ctx, req)
 	if err != nil {
-		var failed *payment.SettlementError
-		if errors.As(err, &failed) {
+		if failed, ok := errors.AsType[*payment.SettlementError](err); ok {
 			response.Protocol(c, SettleResponse{
 				Success:      false,
 				ErrorReason:  failed.Reason,

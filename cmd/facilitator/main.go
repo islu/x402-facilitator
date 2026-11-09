@@ -53,11 +53,9 @@ func run() error {
 	defer stopWorkers()
 
 	var workers sync.WaitGroup
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
+	workers.Go(func() {
 		app.Wallets.Watch(workerCtx, cfg.BalanceCheckInterval)
-	}()
+	})
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,

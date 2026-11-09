@@ -477,7 +477,7 @@ func (s *Signer) takePending(hash common.Hash) *gethtypes.Transaction {
 
 // GetBalance returns the native balance when tokenAddress is empty or the zero
 // address, and the ERC-20 balance otherwise.
-func (s *Signer) GetBalance(ctx context.Context, address string, tokenAddress string) (*big.Int, error) {
+func (s *Signer) GetBalance(ctx context.Context, address, tokenAddress string) (*big.Int, error) {
 	if tokenAddress == "" || tokenAddress == "0x0000000000000000000000000000000000000000" {
 		balance, err := s.client.BalanceAt(ctx, common.HexToAddress(address), nil)
 		if err != nil {

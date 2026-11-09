@@ -34,8 +34,7 @@ func bindPayment(c *gin.Context) (payment.Request, bool) {
 
 	var req PaymentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			response.Error(c, http.StatusRequestEntityTooLarge, "request body exceeds 64 KiB")
 			return payment.Request{}, false
 		}
