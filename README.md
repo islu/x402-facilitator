@@ -18,7 +18,7 @@ Built on [`github.com/x402-foundation/x402/go/v2`](https://github.com/x402-found
 following the structure in the SDK's [FACILITATOR.md](https://github.com/x402-foundation/x402/blob/main/go/FACILITATOR.md).
 
 > **Status: v0.x — for testnets and limited pilots.** Settlement deduplication
-> is in-process and there is no durable ledger yet, so do not put significant
+> is in-process and there is no durable ledger, so do not put significant
 > funds behind it. Versioning and compatibility before and after 1.0:
 > [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
@@ -230,8 +230,7 @@ flight, or — once a transaction was broadcast — gets the recorded outcome fo
 **Scaling.** Instances are stateless apart from three things, all in-process:
 nonces are serialized per process, so **each replica needs its own settlement
 wallet**; the rate limiters need a shared store for a cluster-wide limit; and
-the settlement log only deduplicates retries that reach the same replica. A
-durable, shared settlement ledger is planned.
+the settlement log only deduplicates retries that reach the same replica.
 
 **Timeouts.** Verification is a signature check; settlement waits on block
 inclusion. `RECEIPT_TIMEOUT` must stay below `SETTLE_TIMEOUT`, which is enforced
@@ -318,23 +317,36 @@ Verifying against a public chain needs testnet funds; point `EVM_RPC_URLS` at
 Base Sepolia and drive it with the
 [x402 Go client](https://github.com/x402-foundation/x402/blob/main/go/CLIENT.md).
 
-## Support and services
+## Roadmap
 
-The facilitator is free and open source, and will stay that way: everything
-needed to run one deployment safely — settlement, the ledger, recovery, key
-management — lives in this repository.
+The project is in maintenance mode. What that covers:
 
-For stablecoin issuers and chains bringing x402 to their ecosystem, we also
-offer:
+- **Maintenance** — releases on GitHub, upgrades to new x402 Go SDK versions,
+  dependency and vulnerability updates, and fixes for reported bugs.
+- **Small improvements, when time allows:**
+  - make `ALLOWED_ASSETS` mandatory in production;
+  - check at startup that every allowed token is a contract supporting
+    `transferWithAuthorization`, with a readable EIP-712 domain;
+  - apply the per-payer quota on Solana by reading the transfer authority from
+    the transaction.
+- **Not planned, open to revisit if real users need them:**
+  - a durable, shared settlement ledger, and the features built on it —
+    recovering settlements that land after a timeout, and speeding up stuck
+    transactions instead of cancelling them;
+  - RPC failover;
+  - KMS signing;
+  - sanctions screening;
+  - multi-replica deployments.
 
-- **Managed operation** — we run the facilitator for your network: gas, on-call,
-  upgrades and incident response, under an SLA.
-- **Onboarding** — a new chain or stablecoin brought live, with a conformance
-  report covering verification, settlement, duplicate and timeout handling.
-- **Support contracts** — response-time commitments, security notifications and
-  architecture review.
+  If you need one of these, open an issue describing your use case.
+- **Out of scope:** multi-tenancy, routing across facilitators, and a hosted
+  service.
 
-Contact the maintainer through [GitHub](https://github.com/islu).
+## Support
+
+This is a side project, maintained on a best-effort basis. Questions and bug
+reports go to [GitHub issues](https://github.com/islu/x402-facilitator/issues);
+there is no paid support or managed service.
 
 ## Contributing and security
 
