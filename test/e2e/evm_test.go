@@ -168,7 +168,7 @@ func TestEVMStuckSettlementIsCancelled(t *testing.T) {
 	s.chain.pooled(s.facilitator, s.facilitator)
 	s.chain.mine()
 
-	settled := <-answer
+	settled := answer()
 	require.False(t, settled.Success)
 	require.NotEmpty(t, settled.Transaction, "a broadcast settlement reports its hash")
 	// Not settlement_pending: the payment was replaced, so there is nothing to wait for.
@@ -211,7 +211,7 @@ func TestEVMStuckSettlementLandsAnyway(t *testing.T) {
 	s.chain.sendRaw(raw)
 	s.chain.mine()
 
-	settled := <-answer
+	settled := answer()
 	require.True(t, settled.Success, settled.ErrorReason)
 	assert.True(t, strings.EqualFold(payment.Hex(), settled.Transaction))
 	assert.Equal(t, int64(10000), s.chain.balance(s.token, s.payTo))

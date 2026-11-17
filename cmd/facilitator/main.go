@@ -57,16 +57,19 @@ func run() error {
 		app.Wallets.Watch(workerCtx, cfg.BalanceCheckInterval)
 	})
 
+	const readTimeout = 30 * time.Second
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: app.Router,
 		// Settlement waits on block inclusion, so the write deadline must clear
-		// the settle timeout or gin would cut a settlement off mid-flight. The
+		// the settle timeout or gin would cut a settlement off mid-flight. It
+		// starts once the headers are read, so it also covers reading the body
+		// (bounded by ReadTimeout), which the settle timeout does not. The
 		// extra 30s covers an EVM settlement whose receipt wait timed out
 		// (outcomeBudget in internal/infra/chain/evm/signer.go).
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      cfg.SettleTimeout + 30*time.Second,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      readTimeout + cfg.SettleTimeout + 30*time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 

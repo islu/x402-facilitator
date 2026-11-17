@@ -1,8 +1,12 @@
 package payment
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"maps"
 	"math/big"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -217,8 +221,9 @@ func Test_SettlePayment_Idempotent(t *testing.T) {
 				AnyTimes()
 			svc := newService(deps)
 			req := evmRequest(t, "1000")
-			// Same document, different whitespace: a retry that re-serialized it.
-			retry := payment.Request{Payload: append([]byte(" "), req.Payload...), Requirements: req.Requirements}
+			// The same documents re-serialized, as a client in another language
+			// might: other field order and spacing.
+			retry := payment.Request{Payload: reordered(t, req.Payload), Requirements: reordered(t, req.Requirements)}
 
 			first, firstErr := svc.SettlePayment(context.Background(), req)
 			second, secondErr := svc.SettlePayment(context.Background(), retry)
@@ -284,7 +289,7 @@ func Test_SettlePayment_OtherRequirementsNotReplayed(t *testing.T) {
 }
 
 // A caller that hangs up mid-settlement must not cancel it: its retry joins
-// the attempt, and an EVM wait cancelled early replaces the transaction.
+// the attempt and gets the real outcome.
 func Test_SettlePayment_CallerCancelDoesNotReachMechanism(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	deps := newServiceDeps(ctrl)
@@ -343,4 +348,30 @@ func Test_ListSupported(t *testing.T) {
 			assert.Equal(t, tt.wantReason, reason)
 		})
 	}
+}
+
+// reordered re-serializes a JSON object with its top-level fields in reverse
+// order and spaced out.
+func reordered(t *testing.T, doc []byte) []byte {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(doc, &fields))
+	keys := slices.Sorted(maps.Keys(fields))
+	slices.Reverse(keys)
+
+	var b bytes.Buffer
+	b.WriteString("{ ")
+	for i, key := range keys {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		name, err := json.Marshal(key)
+		require.NoError(t, err)
+		b.Write(name)
+		b.WriteString(": ")
+		b.Write(fields[key])
+	}
+	b.WriteString(" }")
+	require.NotEqual(t, string(doc), b.String())
+	return b.Bytes()
 }

@@ -51,20 +51,33 @@ func newSettlementLog() *settlementLog {
 // settlementKey identifies a settlement by its signed payload and the
 // requirements it is settled against: a recorded outcome is replayed only to
 // the same request, never to one naming another payee or amount, which the
-// mechanism would have refused. Whitespace is compacted so a retry that
-// re-serializes the same documents still matches.
+// mechanism would have refused. Both documents are canonicalized so a retry
+// that re-serializes them still matches.
 func settlementKey(req payment.Request) string {
 	h := sha256.New()
 	for _, doc := range [][]byte{req.Payload, req.Requirements} {
-		var compact bytes.Buffer
-		if err := json.Compact(&compact, doc); err != nil {
-			compact.Reset()
-			compact.Write(doc)
-		}
-		h.Write(compact.Bytes())
+		h.Write(canonicalJSON(doc))
 		h.Write([]byte{0}) // separator: no document contains a NUL byte
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// canonicalJSON re-encodes doc with its object keys sorted (encoding/json sorts
+// map keys), its spacing dropped and its numbers kept verbatim (json.Number),
+// so field order and formatting do not change the key. A document that is not
+// a single JSON value is used as is.
+func canonicalJSON(doc []byte) []byte {
+	dec := json.NewDecoder(bytes.NewReader(doc))
+	dec.UseNumber()
+	var value any
+	if err := dec.Decode(&value); err != nil || dec.More() {
+		return doc
+	}
+	out, err := json.Marshal(value)
+	if err != nil {
+		return doc
+	}
+	return out
 }
 
 // begin returns the entry for key and whether the caller is the one that must

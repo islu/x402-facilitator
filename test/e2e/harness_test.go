@@ -107,8 +107,16 @@ func startFacilitator(t *testing.T, env ...string) *facilitator {
 	return f
 }
 
+// Every request is bounded, so a facilitator that accepts a connection and
+// never answers fails the test instead of hanging it. A settlement may wait out
+// a receipt timeout and then a stuck transaction's outcome.
+var (
+	client      = &http.Client{Timeout: 2 * time.Minute}
+	probeClient = &http.Client{Timeout: time.Second}
+)
+
 func (f *facilitator) healthy() bool {
-	resp, err := http.Get(f.url + "/healthz")
+	resp, err := probeClient.Get(f.url + "/healthz")
 	if err != nil {
 		return false
 	}
@@ -134,12 +142,28 @@ func (f *facilitator) settle(body []byte) settleResponse {
 	return out
 }
 
-// settleAsync sends a settlement and returns where its answer will arrive, so
-// a test can act on the chain while the facilitator waits on it.
-func (f *facilitator) settleAsync(body []byte) <-chan settleResponse {
-	answer := make(chan settleResponse, 1)
-	go func() { answer <- f.settle(body) }()
-	return answer
+type settleAttempt struct {
+	answer settleResponse
+	err    error
+}
+
+// settleAsync sends a settlement and returns a function that waits for its
+// answer, so a test can act on the chain while the facilitator waits on it.
+// The request runs off the test goroutine, so its failure is reported when the
+// test collects the answer.
+func (f *facilitator) settleAsync(body []byte) func() settleResponse {
+	done := make(chan settleAttempt, 1)
+	go func() {
+		var a settleAttempt
+		a.err = f.call("/settle", body, &a.answer)
+		done <- a
+	}()
+	return func() settleResponse {
+		f.t.Helper()
+		a := <-done
+		require.NoError(f.t, a.err)
+		return a.answer
+	}
 }
 
 // settleOnce sends the same payment n times at once, as a resource server
@@ -147,18 +171,21 @@ func (f *facilitator) settleAsync(body []byte) <-chan settleResponse {
 // the same successful answer.
 func (f *facilitator) settleOnce(body []byte, n int) settleResponse {
 	f.t.Helper()
-	results := make([]settleResponse, n)
+	attempts := make([]settleAttempt, n)
 	var wg sync.WaitGroup
-	for i := range results {
-		wg.Go(func() { results[i] = f.settle(body) })
+	for i := range attempts {
+		wg.Go(func() { attempts[i].err = f.call("/settle", body, &attempts[i].answer) })
 	}
 	wg.Wait()
 
-	settled := results[0]
+	for i := range attempts {
+		require.NoError(f.t, attempts[i].err)
+	}
+	settled := attempts[0].answer
 	require.True(f.t, settled.Success, settled.ErrorReason)
 	require.NotEmpty(f.t, settled.Transaction)
 	for i := 1; i < n; i++ {
-		assert.Equal(f.t, settled, results[i])
+		assert.Equal(f.t, settled, attempts[i].answer)
 	}
 	return settled
 }
@@ -179,11 +206,22 @@ func (f *facilitator) refuses(t *testing.T, body []byte, reason string) {
 
 // post requires a 200: an invalid payment is still a successful answer.
 func (f *facilitator) post(path string, body []byte, out any) {
-	resp, err := http.Post(f.url+path, "application/json", bytes.NewReader(body))
-	require.NoError(f.t, err)
+	f.t.Helper()
+	require.NoError(f.t, f.call(path, body, out))
+}
+
+// call posts body and decodes a 200 answer into out. It returns its failure
+// rather than failing the test, so it is safe off the test goroutine.
+func (f *facilitator) call(path string, body []byte, out any) error {
+	resp, err := client.Post(f.url+path, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
 	defer func() { _ = resp.Body.Close() }()
-	require.Equal(f.t, http.StatusOK, resp.StatusCode, path)
-	require.NoError(f.t, json.NewDecoder(resp.Body).Decode(out))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s answered %s", path, resp.Status)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 // paymentBody is what a resource server sends to /verify and /settle.

@@ -407,7 +407,8 @@ func mechReceipt(r *gethtypes.Receipt) *evmmech.TransactionReceipt {
 
 // outcomeBudget bounds giveUp's cancellation and its wait for an outcome. The
 // receipt wait before it ends by the settle deadline, and the HTTP server's
-// WriteTimeout is SETTLE_TIMEOUT plus 30s, so the answer still goes out.
+// WriteTimeout leaves 30s past SETTLE_TIMEOUT and the body read, so the answer
+// still goes out.
 const outcomeBudget = 30 * time.Second
 
 // giveUp ends a receipt wait that ran out of time, with an answer that is true
@@ -510,12 +511,18 @@ func (s *Signer) cancel(ctx context.Context, stuck *gethtypes.Transaction) (comm
 }
 
 // replacementFees prices a same-nonce replacement. Nodes refuse one unless
-// both the tip and the fee cap rise by at least 10% (geth's default), so each
-// is bumped 25% over the stuck transaction — or set to the current market
-// rate if that is higher, since a spike is usually why it got stuck.
+// both the tip and the fee cap rise, by at least 10% (geth's default), so each
+// is bumped 25% (at least 1 wei, which 25% of a fee under 4 wei rounds away)
+// over the stuck transaction — or set to the current market rate if that is
+// higher, since a spike is usually why it got stuck.
 func replacementFees(stuck *gethtypes.Transaction, marketTip, marketFeeCap *big.Int) (tip, feeCap *big.Int) {
+	one := big.NewInt(1)
 	bump := func(v, floor *big.Int) *big.Int {
-		bumped := new(big.Int).Add(v, new(big.Int).Div(v, big.NewInt(4)))
+		step := new(big.Int).Div(v, big.NewInt(4))
+		if step.Cmp(one) < 0 {
+			step = one
+		}
+		bumped := new(big.Int).Add(v, step)
 		if bumped.Cmp(floor) < 0 {
 			return new(big.Int).Set(floor)
 		}
