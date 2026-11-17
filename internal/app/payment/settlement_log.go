@@ -30,9 +30,6 @@ const settlementRetention = 10 * time.Minute
 // double charge. Back this with a durable shared store (the planned settlement
 // ledger) when running more than one replica.
 type settlementLog struct {
-	retention time.Duration
-	now       func() time.Time
-
 	mu        sync.Mutex
 	entries   map[string]*settlementEntry
 	lastPrune time.Time
@@ -47,12 +44,8 @@ type settlementEntry struct {
 	finished time.Time
 }
 
-func newSettlementLog(retention time.Duration) *settlementLog {
-	return &settlementLog{
-		retention: retention,
-		now:       time.Now,
-		entries:   map[string]*settlementEntry{},
-	}
+func newSettlementLog() *settlementLog {
+	return &settlementLog{entries: map[string]*settlementEntry{}}
 }
 
 // settlementKey identifies a settlement by its signed payload and the
@@ -80,7 +73,7 @@ func (l *settlementLog) begin(key string) (*settlementEntry, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	now := l.now()
+	now := time.Now()
 	if now.Sub(l.lastPrune) >= time.Minute {
 		l.pruneLocked(now)
 	}
@@ -101,7 +94,7 @@ func (l *settlementLog) finish(key string, entry *settlementEntry, result paymen
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	entry.result, entry.err, entry.finished = result, err, l.now()
+	entry.result, entry.err, entry.finished = result, err, time.Now()
 	close(entry.done)
 
 	var failed *payment.SettlementError
@@ -127,7 +120,7 @@ func (l *settlementLog) pruneLocked(now time.Time) {
 	for key, entry := range l.entries {
 		select {
 		case <-entry.done:
-			if now.Sub(entry.finished) > l.retention {
+			if now.Sub(entry.finished) > settlementRetention {
 				delete(l.entries, key)
 			}
 		default: // still in flight

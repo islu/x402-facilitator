@@ -350,9 +350,8 @@ func (s *Signer) SendTransaction(ctx context.Context, to string, data []byte) (s
 // passes or ctx is cancelled. Logs are included so the mechanism can confirm
 // the ERC-20 Transfer event actually matches the payment.
 //
-// A transaction this signer broadcast that is still unmined when the wait ends
-// is cancelled and reported as a failed receipt (see giveUp): left alone it
-// would block every later nonce.
+// A transaction this signer broadcast that is still unmined when the wait times
+// out is cancelled (see giveUp): left alone it would block every later nonce.
 func (s *Signer) WaitForTransactionReceipt(ctx context.Context, txHash string) (*evmmech.TransactionReceipt, error) {
 	hash := common.HexToHash(txHash)
 	defer s.takePending(hash)
@@ -362,6 +361,11 @@ func (s *Signer) WaitForTransactionReceipt(ctx context.Context, txHash string) (
 	receipt, lastErr := s.pollReceipt(waitCtx, hash)
 	if receipt != nil {
 		return mechReceipt(receipt), nil
+	}
+	// Only running out of time makes a transaction stuck. A caller that went
+	// away says nothing about it, so it is left to land.
+	if !errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+		return nil, fmt.Errorf("receipt for %s: %w", hash.Hex(), waitCtx.Err())
 	}
 	return s.giveUp(ctx, hash, waitCtx.Err(), lastErr)
 }

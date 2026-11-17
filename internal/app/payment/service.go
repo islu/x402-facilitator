@@ -50,7 +50,7 @@ func NewService(
 		metrics:     metrics,
 		policy:      policy,
 		logger:      logger.With("service", "payment"),
-		settlements: newSettlementLog(settlementRetention),
+		settlements: newSettlementLog(),
 	}
 }
 
@@ -65,7 +65,7 @@ func NewService(
 // is not limited: bucketing every anonymous request together would let one
 // caller exhaust the quota for all of them.
 func (s *Service) rateLimited(operation string, meta payment.Metadata) bool {
-	if !s.limiter.Enabled() || meta.Payer == "" || !s.limiter.Exceeded(meta.Payer) {
+	if meta.Payer == "" || !s.limiter.Exceeded(meta.Payer) {
 		return false
 	}
 	s.metrics.Inc(metricRateLimited, telemetry.Labels{"operation": operation})
@@ -75,7 +75,7 @@ func (s *Service) rateLimited(operation string, meta payment.Metadata) bool {
 // recordPayer counts a payment against its payer's quota once the mechanism
 // has accepted it.
 func (s *Service) recordPayer(meta payment.Metadata) {
-	if s.limiter.Enabled() && meta.Payer != "" {
+	if meta.Payer != "" {
 		s.limiter.Allow(meta.Payer)
 	}
 }

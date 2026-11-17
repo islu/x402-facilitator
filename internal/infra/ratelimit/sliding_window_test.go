@@ -126,52 +126,6 @@ func Test_Enabled(t *testing.T) {
 	}
 }
 
-func Test_Cleanup(t *testing.T) {
-	tests := []struct {
-		name         string
-		limit        int
-		elapsed      time.Duration
-		wantRetained int
-	}{
-		{
-			name:         "keys whose attempts aged out are dropped",
-			limit:        5,
-			elapsed:      2 * time.Minute,
-			wantRetained: 0,
-		},
-		{
-			name:         "keys still inside the window are kept",
-			limit:        5,
-			elapsed:      30 * time.Second,
-			wantRetained: 1,
-		},
-		{
-			name:         "a disabled limiter has nothing to clean",
-			limit:        0,
-			elapsed:      2 * time.Minute,
-			wantRetained: 0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			now := time.Now()
-			limiter := New(tt.limit, time.Minute)
-			limiter.now = func() time.Time { return now }
-			require.True(t, limiter.Allow("0xabc"))
-
-			now = now.Add(tt.elapsed)
-			limiter.Cleanup()
-
-			limiter.mu.Lock()
-			defer limiter.mu.Unlock()
-			assert.Len(t, limiter.hits, tt.wantRetained)
-		})
-	}
-}
-
-// Exceeded lets a caller check a quota before doing work and count the attempt
-// only once it has proven itself, so it must never record anything.
 func Test_Exceeded(t *testing.T) {
 	limiter := New(1, time.Minute)
 

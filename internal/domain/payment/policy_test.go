@@ -93,7 +93,7 @@ func Test_PolicyCheck(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reason, _ := tt.policy.Check(Metadata{
 				Network: network,
-				Asset:   normalizeAddress(tt.asset),
+				Asset:   tt.asset,
 				Amount:  tt.amount,
 			})
 

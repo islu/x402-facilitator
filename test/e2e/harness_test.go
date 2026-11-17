@@ -23,7 +23,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	x402sdk "github.com/x402-foundation/x402/go/v2"
 	"github.com/x402-foundation/x402/go/v2/types"
 )
 
@@ -114,19 +116,11 @@ func (f *facilitator) healthy() bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-type verifyResponse struct {
-	IsValid       bool   `json:"isValid"`
-	InvalidReason string `json:"invalidReason"`
-	Payer         string `json:"payer"`
-}
-
-type settleResponse struct {
-	Success     bool   `json:"success"`
-	ErrorReason string `json:"errorReason"`
-	Transaction string `json:"transaction"`
-	Network     string `json:"network"`
-	Payer       string `json:"payer"`
-}
+// The facilitator's answers, decoded into the SDK's own wire types.
+type (
+	verifyResponse = x402sdk.VerifyResponse
+	settleResponse = x402sdk.SettleResponse
+)
 
 func (f *facilitator) verify(body []byte) verifyResponse {
 	var out verifyResponse
@@ -148,16 +142,39 @@ func (f *facilitator) settleAsync(body []byte) <-chan settleResponse {
 	return answer
 }
 
-// settleConcurrently sends the same payment n times at once, as a resource
-// server retrying on a timeout would.
-func (f *facilitator) settleConcurrently(body []byte, n int) []settleResponse {
+// settleOnce sends the same payment n times at once, as a resource server
+// retrying on a timeout would, and requires one settlement: every caller gets
+// the same successful answer.
+func (f *facilitator) settleOnce(body []byte, n int) settleResponse {
+	f.t.Helper()
 	results := make([]settleResponse, n)
 	var wg sync.WaitGroup
 	for i := range results {
 		wg.Go(func() { results[i] = f.settle(body) })
 	}
 	wg.Wait()
-	return results
+
+	settled := results[0]
+	require.True(f.t, settled.Success, settled.ErrorReason)
+	require.NotEmpty(f.t, settled.Transaction)
+	for i := 1; i < n; i++ {
+		assert.Equal(f.t, settled, results[i])
+	}
+	return settled
+}
+
+// refuses asserts that verify and settle both refuse body for reason, and that
+// settle reports no transaction.
+func (f *facilitator) refuses(t *testing.T, body []byte, reason string) {
+	t.Helper()
+	verified := f.verify(body)
+	assert.False(t, verified.IsValid)
+	assert.Equal(t, reason, verified.InvalidReason)
+
+	settled := f.settle(body)
+	assert.False(t, settled.Success)
+	assert.Equal(t, reason, settled.ErrorReason)
+	assert.Empty(t, settled.Transaction)
 }
 
 // post requires a 200: an invalid payment is still a successful answer.

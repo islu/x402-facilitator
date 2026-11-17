@@ -83,7 +83,6 @@ type disabledLimiter struct{}
 
 func (disabledLimiter) Allow(string) bool    { return true }
 func (disabledLimiter) Exceeded(string) bool { return false }
-func (disabledLimiter) Enabled() bool        { return false }
 
 func post(t *testing.T, handler http.Handler, path, body string) *httptest.ResponseRecorder {
 	t.Helper()

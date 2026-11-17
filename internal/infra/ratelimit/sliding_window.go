@@ -79,17 +79,6 @@ func (l *SlidingWindow) Exceeded(key string) bool {
 	return len(l.liveLocked(key, l.now())) >= l.limit
 }
 
-// Cleanup drops keys whose events have all aged out. Allow runs it once per
-// window, so callers only need it to force a sweep.
-func (l *SlidingWindow) Cleanup() {
-	if !l.Enabled() {
-		return
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.pruneLocked(l.now())
-}
-
 // liveLocked drops key's expired events and returns the rest. It filters in
 // place, so it must store the result: a caller that only read it would leave
 // the old length over a shifted array and count events twice. Unknown keys are

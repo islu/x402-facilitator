@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	x402sdk "github.com/x402-foundation/x402/go/v2"
+	"github.com/x402-foundation/x402/go/v2/mechanisms/evm"
 	evmclient "github.com/x402-foundation/x402/go/v2/mechanisms/evm/exact/client"
 	exactevm "github.com/x402-foundation/x402/go/v2/mechanisms/evm/exact/facilitator"
 	evmsigners "github.com/x402-foundation/x402/go/v2/signers/evm"
@@ -114,13 +115,7 @@ func TestEVMSettle(t *testing.T) {
 	assert.True(t, strings.EqualFold(s.buyer.Hex(), verified.Payer))
 
 	// Concurrent retries of one payment: one transaction, every caller gets its hash.
-	results := f.settleConcurrently(body, 3)
-	settled := results[0]
-	require.True(t, settled.Success, settled.ErrorReason)
-	require.NotEmpty(t, settled.Transaction)
-	for _, r := range results[1:] {
-		assert.Equal(t, settled, r)
-	}
+	settled := f.settleOnce(body, 3)
 
 	receipt, err := s.chain.eth.TransactionReceipt(context.Background(), common.HexToHash(settled.Transaction))
 	require.NoError(t, err)
@@ -155,16 +150,7 @@ func TestEVMPolicyRejectsWithoutGas(t *testing.T) {
 		}(), "asset_not_allowed"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			verified := f.verify(tt.body)
-			assert.False(t, verified.IsValid)
-			assert.Equal(t, tt.reason, verified.InvalidReason)
-
-			settled := f.settle(tt.body)
-			assert.False(t, settled.Success)
-			assert.Equal(t, tt.reason, settled.ErrorReason)
-			assert.Empty(t, settled.Transaction)
-		})
+		t.Run(tt.name, func(t *testing.T) { f.refuses(t, tt.body, tt.reason) })
 	}
 	assert.Equal(t, uint64(0), s.chain.nonce(s.facilitator), "no transaction sent")
 }
@@ -418,16 +404,12 @@ func evmPay(t *testing.T, buyer *ecdsa.PrivateKey, req types.PaymentRequirements
 func authorizationNonce(t *testing.T, body []byte) common.Hash {
 	t.Helper()
 	var doc struct {
-		PaymentPayload struct {
-			Payload struct {
-				Authorization struct {
-					Nonce string `json:"nonce"`
-				} `json:"authorization"`
-			} `json:"payload"`
-		} `json:"paymentPayload"`
+		PaymentPayload types.PaymentPayload `json:"paymentPayload"`
 	}
 	require.NoError(t, json.Unmarshal(body, &doc))
-	return common.HexToHash(doc.PaymentPayload.Payload.Authorization.Nonce)
+	payload, err := evm.PayloadFromMap(doc.PaymentPayload.Payload)
+	require.NoError(t, err)
+	return common.HexToHash(payload.Authorization.Nonce)
 }
 
 func newEVMKey(t *testing.T) (*ecdsa.PrivateKey, common.Address) {

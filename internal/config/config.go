@@ -470,13 +470,9 @@ func envDuration(name string, fallback time.Duration) (time.Duration, error) {
 }
 
 func envBigInt(name string) (*big.Int, error) {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return nil, nil
-	}
-	v, ok := new(big.Int).SetString(raw, 10)
-	if !ok || v.Sign() < 0 {
-		return nil, fmt.Errorf("%s: %q is not a non-negative integer", name, raw)
+	v, err := parseAmount(os.Getenv(name))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	return v, nil
 }

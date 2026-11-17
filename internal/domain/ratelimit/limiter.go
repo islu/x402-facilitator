@@ -6,8 +6,8 @@ package ratelimit
 
 // Limiter decides whether an action for key is within quota.
 //
-// Implementations live under internal/infra/ratelimit. Enabled lets callers
-// skip the bookkeeping (and the log line) entirely when no limit is configured.
+// Implementations live under internal/infra/ratelimit. A limiter with no limit
+// configured allows everything and is never exceeded.
 type Limiter interface {
 	// Allow records an attempt for key and reports whether it is within quota.
 	Allow(key string) bool
@@ -15,8 +15,6 @@ type Limiter interface {
 	// anything. Callers that may only count an attempt once it has proven
 	// itself check with Exceeded first and record with Allow afterwards.
 	Exceeded(key string) bool
-	// Enabled reports whether the limiter enforces anything.
-	Enabled() bool
 }
 
 // ClientLimiter is the Limiter keyed by caller IP rather than by payer. It is

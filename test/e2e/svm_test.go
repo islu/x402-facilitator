@@ -97,13 +97,7 @@ func TestSVMSettle(t *testing.T) {
 	before := v.signatureCount(s.feePayer)
 
 	// Concurrent retries of one payment: one transaction, every caller gets its signature.
-	results := f.settleConcurrently(body, 3)
-	settled := results[0]
-	require.True(t, settled.Success, settled.ErrorReason)
-	require.NotEmpty(t, settled.Transaction)
-	for _, r := range results[1:] {
-		assert.Equal(t, settled, r)
-	}
+	settled := f.settleOnce(body, 3)
 
 	assert.Equal(t, uint64(10000), v.tokenBalance(s.payTo, s.mint))
 	assert.Equal(t, uint64(990000), v.tokenBalance(s.buyer, s.mint))
@@ -130,16 +124,7 @@ func TestSVMPolicyRejectsWithoutFees(t *testing.T) {
 	}
 	before := v.signatureCount(s.feePayer)
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			verified := f.verify(tt.body)
-			assert.False(t, verified.IsValid)
-			assert.Equal(t, tt.reason, verified.InvalidReason)
-
-			settled := f.settle(tt.body)
-			assert.False(t, settled.Success)
-			assert.Equal(t, tt.reason, settled.ErrorReason)
-			assert.Empty(t, settled.Transaction)
-		})
+		t.Run(tt.name, func(t *testing.T) { f.refuses(t, tt.body, tt.reason) })
 	}
 	assert.Equal(t, before, v.signatureCount(s.feePayer), "no transaction sent")
 }

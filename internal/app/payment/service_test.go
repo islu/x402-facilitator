@@ -50,7 +50,7 @@ func newService(deps serviceDeps) *Service {
 		metrics:     deps.metrics,
 		policy:      deps.policy,
 		logger:      deps.logger,
-		settlements: newSettlementLog(settlementRetention),
+		settlements: newSettlementLog(),
 	}
 }
 
@@ -94,7 +94,6 @@ type disabledLimiter struct{}
 
 func (disabledLimiter) Allow(string) bool    { return true }
 func (disabledLimiter) Exceeded(string) bool { return false }
-func (disabledLimiter) Enabled() bool        { return false }
 
 // countingLimiter allows the first n recorded calls and records the keys it saw.
 type countingLimiter struct {
@@ -112,8 +111,6 @@ func (l *countingLimiter) Allow(key string) bool {
 }
 
 func (l *countingLimiter) Exceeded(string) bool { return l.remaining <= 0 }
-
-func (l *countingLimiter) Enabled() bool { return true }
 
 // discardRecorder drops metrics; tests that assert on them use recordingRecorder.
 type discardRecorder struct{}

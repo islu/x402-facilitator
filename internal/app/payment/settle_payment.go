@@ -23,8 +23,8 @@ func (s *Service) SettlePayment(ctx context.Context, req payment.Request) (payme
 	}
 
 	// The settlement outlives its caller: a resource server that times out and
-	// retries must find it still running, not cancelled — on EVM a cancelled
-	// receipt wait replaces the broadcast transaction. Only the deadline stays.
+	// retries must find it still running and get its real outcome, not an
+	// abandoned wait reported as pending. Only the deadline stays.
 	settleCtx := context.WithoutCancel(ctx)
 	if deadline, ok := ctx.Deadline(); ok {
 		var cancel context.CancelFunc
