@@ -434,6 +434,28 @@ func Test_SystemErrorHidesCause(t *testing.T) {
 	}
 }
 
+// A verdict is answered with 200 and its reason, but the mechanism's detail —
+// which can quote an RPC error — stays in the log.
+func Test_VerdictHidesDetail(t *testing.T) {
+	detail := errRPCDown.Error()
+	for _, path := range []string{"/verify", "/settle"} {
+		t.Run(path, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			router, processor := newTestRouter(ctrl)
+			processor.EXPECT().Verify(gomock.Any(), gomock.Any()).Return(payment.VerifyResult{},
+				payment.NewVerificationError("invalid_exact_evm_failed_to_verify_signature", "", testPayer).WithDetail(detail)).AnyTimes()
+			processor.EXPECT().Settle(gomock.Any(), gomock.Any()).Return(payment.SettleResult{},
+				payment.NewSettlementError("settlement_pending", "", testPayer, testNetwork, "0xdead").WithDetail(detail)).AnyTimes()
+
+			rec := post(t, router, path, validBody)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Regexp(t, "invalid_exact_evm_failed_to_verify_signature|settlement_pending", rec.Body.String())
+			assert.NotContains(t, rec.Body.String(), "SECRET-API-KEY")
+		})
+	}
+}
+
 func Test_OversizedBody(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	router, _ := newTestRouter(ctrl)

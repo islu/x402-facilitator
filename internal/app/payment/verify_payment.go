@@ -81,7 +81,9 @@ func (s *Service) recordVerifyFailure(ctx context.Context, meta payment.Metadata
 		"scheme", meta.Scheme,
 		"payer", cmpOr(invalid.Payer, meta.Payer),
 		"reason", invalid.Reason,
-		"message", invalid.Message,
+		// The error, not just Message: it carries the mechanism's detail, which
+		// is for the log only.
+		"error", invalid,
 	)
 }
 

@@ -13,6 +13,7 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"strings"
 	"sync"
@@ -349,7 +350,8 @@ func (s *Signer) SendTransaction(ctx context.Context, to string, data []byte) (s
 // the ERC-20 Transfer event actually matches the payment.
 //
 // A transaction this signer broadcast that is still unmined when the wait ends
-// is cancelled (see cancel): left alone it would block every later nonce.
+// is cancelled and reported as a failed receipt (see giveUp): left alone it
+// would block every later nonce.
 func (s *Signer) WaitForTransactionReceipt(ctx context.Context, txHash string) (*evmmech.TransactionReceipt, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, s.cfg.ReceiptTimeout)
 	defer cancel()
@@ -380,15 +382,32 @@ func (s *Signer) WaitForTransactionReceipt(ctx context.Context, txHash string) (
 
 		select {
 		case <-waitCtx.Done():
-			return nil, s.giveUp(ctx, hash, waitCtx.Err(), lastErr)
+			return s.giveUp(ctx, hash, waitCtx.Err(), lastErr)
 		case <-ticker.C:
 		}
 	}
 }
 
-// giveUp builds the error for a receipt that never arrived, cancelling the
-// transaction if this signer sent it.
-func (s *Signer) giveUp(ctx context.Context, hash common.Hash, cause, lastRPCErr error) error {
+// giveUp ends a receipt wait that ran out of time.
+//
+// A transaction this signer sent is cancelled (see cancel). Once the
+// cancellation is broadcast the payment cannot land, so giveUp reports a
+// failed receipt rather than an error: the mechanism then answers
+// transaction_failed with the original hash, and the payer, never charged, can
+// pay again. An error would make the SDK answer settlement_pending, telling the
+// resource server to wait for a transaction that has been replaced. A retry of
+// the same payment replays that failure from the app's settlement log; after
+// that expires the authorization is still unused, so the payment settles anew.
+//
+// ponytail: if the original was mined in a block this node had not yet seen
+// when it accepted the cancellation, the payer is charged while the caller sees
+// transaction_failed; the hash it holds then shows the transfer on-chain. Wait
+// for the cancellation's receipt before answering if that window matters.
+//
+// Without a cancellation (the hash is not ours, or cancelling failed) the
+// original may still land, so the error stands and the SDK reports
+// settlement_pending.
+func (s *Signer) giveUp(ctx context.Context, hash common.Hash, cause, lastRPCErr error) (*evmmech.TransactionReceipt, error) {
 	err := fmt.Errorf("receipt for %s not found within %s: %w", hash.Hex(), s.cfg.ReceiptTimeout, cause)
 	if lastRPCErr != nil {
 		err = fmt.Errorf("%w (last RPC error: %w)", err, lastRPCErr)
@@ -396,7 +415,7 @@ func (s *Signer) giveUp(ctx context.Context, hash common.Hash, cause, lastRPCErr
 
 	stuck := s.takePending(hash)
 	if stuck == nil {
-		return err
+		return nil, err
 	}
 	// The caller's context is done or nearly so; the cancellation still has to
 	// reach the node.
@@ -404,9 +423,13 @@ func (s *Signer) giveUp(ctx context.Context, hash common.Hash, cause, lastRPCErr
 	defer cancel()
 	replacement, cErr := s.cancel(cancelCtx, stuck)
 	if cErr != nil {
-		return fmt.Errorf("%w; cancelling it failed: %w", err, cErr)
+		return nil, fmt.Errorf("%w; cancelling it failed: %w", err, cErr)
 	}
-	return fmt.Errorf("%w; replaced with cancellation %s", err, replacement)
+	// The failed receipt carries no message, so the cancellation and what led
+	// to it are logged here.
+	slog.WarnContext(ctx, "unconfirmed settlement replaced with a cancellation",
+		"network", s.network, "tx", hash.Hex(), "cancellation", replacement, "cause", err)
+	return &evmmech.TransactionReceipt{Status: evmmech.TxStatusFailed, TxHash: hash.Hex()}, nil
 }
 
 // cancel replaces a transaction that never confirmed with a zero-value

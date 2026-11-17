@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	x402sdk "github.com/x402-foundation/x402/go/v2"
 	evmclient "github.com/x402-foundation/x402/go/v2/mechanisms/evm/exact/client"
+	exactevm "github.com/x402-foundation/x402/go/v2/mechanisms/evm/exact/facilitator"
 	evmsigners "github.com/x402-foundation/x402/go/v2/signers/evm"
 	"github.com/x402-foundation/x402/go/v2/types"
 )
@@ -179,6 +180,8 @@ func TestEVMStuckSettlementIsCancelled(t *testing.T) {
 	settled := f.settle(body)
 	require.False(t, settled.Success)
 	require.NotEmpty(t, settled.Transaction, "a broadcast settlement reports its hash")
+	// Not settlement_pending: the payment was replaced, so there is nothing to wait for.
+	assert.Equal(t, exactevm.ErrTransactionFailed, settled.ErrorReason)
 
 	// Mine the mempool: only the cancellation can land.
 	s.chain.mine()

@@ -22,15 +22,17 @@ func Test_translateVerifyError(t *testing.T) {
 		// arrive as *payment.VerificationError.
 		wantVerdict bool
 		wantReason  string
-		wantMessage string
-		wantPayer   string
+		// wantDetail is the SDK's message: kept for the log, never in Message,
+		// which goes to the caller.
+		wantDetail string
+		wantPayer  string
 	}{
 		{
 			name:        "an SDK verify error becomes a domain verification error",
 			err:         x402sdk.NewVerifyError("invalid_signature", "0xabc", "bad signature"),
 			wantVerdict: true,
 			wantReason:  "invalid_signature",
-			wantMessage: "bad signature",
+			wantDetail:  "bad signature",
 			wantPayer:   "0xabc",
 		},
 		{
@@ -60,7 +62,8 @@ func Test_translateVerifyError(t *testing.T) {
 			}
 			require.ErrorAs(t, err, &invalid)
 			assert.Equal(t, tt.wantReason, invalid.Reason)
-			assert.Equal(t, tt.wantMessage, invalid.Message)
+			assert.Empty(t, invalid.Message)
+			assert.Contains(t, invalid.Error(), tt.wantDetail)
 			assert.Equal(t, tt.wantPayer, invalid.Payer)
 		})
 	}
@@ -74,6 +77,7 @@ func Test_translateSettleError(t *testing.T) {
 		wantReason      string
 		wantNetwork     string
 		wantTransaction string
+		wantDetail      string
 	}{
 		{
 			// The transaction hash has to survive: it is the only handle on a
@@ -85,6 +89,7 @@ func Test_translateSettleError(t *testing.T) {
 			wantReason:      "transaction_failed",
 			wantNetwork:     "eip155:84532",
 			wantTransaction: "0xdead",
+			wantDetail:      "reverted",
 		},
 		{
 			name:        "a failure before broadcast carries no transaction",
@@ -114,6 +119,8 @@ func Test_translateSettleError(t *testing.T) {
 			assert.Equal(t, tt.wantReason, failed.Reason)
 			assert.Equal(t, tt.wantNetwork, failed.Network)
 			assert.Equal(t, tt.wantTransaction, failed.Transaction)
+			assert.Empty(t, failed.Message)
+			assert.Contains(t, failed.Error(), tt.wantDetail)
 		})
 	}
 }

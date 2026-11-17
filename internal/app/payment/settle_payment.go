@@ -105,7 +105,9 @@ func (s *Service) recordSettleFailure(ctx context.Context, meta payment.Metadata
 		"scheme", meta.Scheme,
 		"payer", cmpOr(failed.Payer, meta.Payer),
 		"reason", failed.Reason,
-		"message", failed.Message,
+		// The error, not just Message: it carries the mechanism's detail, which
+		// is for the log only.
+		"error", failed,
 		"transaction", failed.Transaction,
 	)
 }
