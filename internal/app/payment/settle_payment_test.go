@@ -266,6 +266,41 @@ func Test_SettlePayment_ConcurrentDuplicateJoinsInFlight(t *testing.T) {
 	assert.Equal(t, "0xdead", (<-follower).Transaction)
 }
 
+// A recorded success is not replayed to a request settling the same payload
+// against other requirements: the mechanism must judge that one.
+func Test_SettlePayment_OtherRequirementsNotReplayed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	deps := newServiceDeps(ctrl)
+	deps.processor.EXPECT().Settle(gomock.Any(), gomock.Any()).
+		Return(payment.SettleResult{Success: true, Transaction: "0xdead"}, nil).Times(2)
+	svc := newService(deps)
+	req := evmRequest(t, "1000")
+	other := payment.Request{Payload: req.Payload, Requirements: evmRequest(t, "2000").Requirements}
+
+	_, err := svc.SettlePayment(context.Background(), req)
+	require.NoError(t, err)
+	_, err = svc.SettlePayment(context.Background(), other)
+	require.NoError(t, err)
+}
+
+// A caller that hangs up mid-settlement must not cancel it: its retry joins
+// the attempt, and an EVM wait cancelled early replaces the transaction.
+func Test_SettlePayment_CallerCancelDoesNotReachMechanism(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	deps := newServiceDeps(ctrl)
+	deps.processor.EXPECT().Settle(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, _ payment.Request) (payment.SettleResult, error) {
+			return payment.SettleResult{Success: true, Transaction: "0xdead"}, ctx.Err()
+		}).Times(1)
+	svc := newService(deps)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result, err := svc.SettlePayment(ctx, evmRequest(t, "1000"))
+	require.NoError(t, err)
+	assert.Equal(t, "0xdead", result.Transaction)
+}
+
 func Test_ListSupported(t *testing.T) {
 	tests := []struct {
 		name       string

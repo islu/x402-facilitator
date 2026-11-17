@@ -22,7 +22,16 @@ func (s *Service) SettlePayment(ctx context.Context, req payment.Request) (payme
 		return entry.wait(ctx)
 	}
 
-	result, err := s.settle(ctx, req)
+	// The settlement outlives its caller: a resource server that times out and
+	// retries must find it still running, not cancelled — on EVM a cancelled
+	// receipt wait replaces the broadcast transaction. Only the deadline stays.
+	settleCtx := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		settleCtx, cancel = context.WithDeadline(settleCtx, deadline)
+		defer cancel()
+	}
+	result, err := s.settle(settleCtx, req)
 	s.settlements.finish(key, entry, result, err)
 	return result, err
 }

@@ -235,8 +235,12 @@ EIP-3009 token and have your wallet pay gas to move it.
 
 **Stuck transactions.** A settlement still unmined after `RECEIPT_TIMEOUT` is
 replaced at the same nonce by a zero-value self-transfer at a higher fee, so one
-underpriced transaction cannot block every later one. The settle response
-reports failure with the original hash and the replacement's.
+underpriced transaction cannot block every later one. A block builder may still
+mine the original, so the facilitator then waits up to 30 seconds for whichever
+lands: the payment (the response reports success), the cancellation (failure
+with the original hash; the payer was not charged), or neither
+(`settlement_pending` with the original hash, which may still land). The
+cancellation's hash is logged.
 
 **Idempotency.** A `/settle` retry for the same payload joins the attempt in
 flight, or — once a transaction was broadcast — gets the recorded outcome for
@@ -330,7 +334,8 @@ state:
 - EVM, on [anvil](https://getfoundry.sh) with an EIP-3009 token compiled from
   `test/e2e/testdata`: verify, settle, concurrent and repeated settles of one
   payment, policy rejections that must not spend gas, and a stuck transaction
-  (automine off) that must be cancelled at the same nonce.
+  (automine off) that must be cancelled at the same nonce — or reported as
+  settled when the original is mined anyway.
 - Solana, on `solana-test-validator` with a fresh SPL mint: verify, settle,
   concurrent and repeated settles, and policy rejections. Its setup waits for
   finality (about 13 seconds per test), since the x402 client reads at

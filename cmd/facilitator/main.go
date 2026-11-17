@@ -61,7 +61,9 @@ func run() error {
 		Addr:    ":" + cfg.Port,
 		Handler: app.Router,
 		// Settlement waits on block inclusion, so the write deadline must clear
-		// the settle timeout or gin would cut a settlement off mid-flight.
+		// the settle timeout or gin would cut a settlement off mid-flight. The
+		// extra 30s covers an EVM settlement whose receipt wait timed out
+		// (outcomeBudget in internal/infra/chain/evm/signer.go).
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      cfg.SettleTimeout + 30*time.Second,

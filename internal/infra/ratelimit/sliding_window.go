@@ -62,7 +62,6 @@ func (l *SlidingWindow) Allow(key string) bool {
 	}
 	kept := l.liveLocked(key, now)
 	if len(kept) >= l.limit {
-		l.hits[key] = kept
 		return false
 	}
 	l.hits[key] = append(kept, now)
@@ -91,16 +90,23 @@ func (l *SlidingWindow) Cleanup() {
 	l.pruneLocked(l.now())
 }
 
-// liveLocked returns the events for key still inside the window. Callers must
-// hold l.mu.
+// liveLocked drops key's expired events and returns the rest. It filters in
+// place, so it must store the result: a caller that only read it would leave
+// the old length over a shifted array and count events twice. Unknown keys are
+// not added. Callers must hold l.mu.
 func (l *SlidingWindow) liveLocked(key string, now time.Time) []time.Time {
+	hits, ok := l.hits[key]
+	if !ok {
+		return nil
+	}
 	cutoff := now.Add(-l.window)
-	kept := l.hits[key][:0]
-	for _, hit := range l.hits[key] {
+	kept := hits[:0]
+	for _, hit := range hits {
 		if hit.After(cutoff) {
 			kept = append(kept, hit)
 		}
 	}
+	l.hits[key] = kept
 	return kept
 }
 
@@ -108,9 +114,7 @@ func (l *SlidingWindow) liveLocked(key string, now time.Time) []time.Time {
 func (l *SlidingWindow) pruneLocked(now time.Time) {
 	l.lastPrune = now
 	for key := range l.hits {
-		if live := l.liveLocked(key, now); len(live) > 0 {
-			l.hits[key] = live
-		} else {
+		if len(l.liveLocked(key, now)) == 0 {
 			delete(l.hits, key)
 		}
 	}

@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/islu/x402-facilitator/internal/domain/payment"
 )
 
 // EVMNetwork is one registered EVM network and the wallet that settles on it.
@@ -304,6 +306,9 @@ func parseAllowedAssets(networks []string) ([]AllowedAsset, error) {
 		return nil, err
 	}
 	var out []AllowedAsset
+	// Keyed the way the policy is, so two spellings of one contract (EIP-55
+	// and lowercase) cannot both pass with one silently overriding the other.
+	seen := map[string]string{}
 	for _, key := range sortedKeys(entries) {
 		network, asset, ok := strings.Cut(key, "/")
 		if !ok || asset == "" {
@@ -312,6 +317,10 @@ func parseAllowedAssets(networks []string) ([]AllowedAsset, error) {
 		if !slices.Contains(networks, network) {
 			return nil, fmt.Errorf("ALLOWED_ASSETS: %s is not a configured network", network)
 		}
+		if other, dup := seen[payment.AssetKey(network, asset)]; dup {
+			return nil, fmt.Errorf("ALLOWED_ASSETS: %s and %s are the same asset", other, key)
+		}
+		seen[payment.AssetKey(network, asset)] = key
 		minRaw, maxRaw, hasMin := strings.Cut(entries[key], ":")
 		if !hasMin {
 			minRaw, maxRaw = "", minRaw

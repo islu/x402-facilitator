@@ -26,6 +26,7 @@ import (
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 	evmmech "github.com/x402-foundation/x402/go/v2/mechanisms/evm"
 
@@ -353,60 +354,78 @@ func (s *Signer) SendTransaction(ctx context.Context, to string, data []byte) (s
 // is cancelled and reported as a failed receipt (see giveUp): left alone it
 // would block every later nonce.
 func (s *Signer) WaitForTransactionReceipt(ctx context.Context, txHash string) (*evmmech.TransactionReceipt, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, s.cfg.ReceiptTimeout)
-	defer cancel()
-
 	hash := common.HexToHash(txHash)
 	defer s.takePending(hash)
 
+	waitCtx, cancel := context.WithTimeout(ctx, s.cfg.ReceiptTimeout)
+	defer cancel()
+	receipt, lastErr := s.pollReceipt(waitCtx, hash)
+	if receipt != nil {
+		return mechReceipt(receipt), nil
+	}
+	return s.giveUp(ctx, hash, waitCtx.Err(), lastErr)
+}
+
+// pollReceipt polls until one of hashes is mined or ctx ends, and returns that
+// receipt, or nil and the last RPC error seen. Transient RPC errors are
+// expected while a transaction propagates, so they do not end the wait.
+func (s *Signer) pollReceipt(ctx context.Context, hashes ...common.Hash) (*gethtypes.Receipt, error) {
 	ticker := time.NewTicker(s.cfg.ReceiptPollInterval)
 	defer ticker.Stop()
 
 	var lastErr error
 	for {
-		receipt, err := s.client.TransactionReceipt(waitCtx, hash)
-		if err == nil && receipt != nil {
-			return &evmmech.TransactionReceipt{
-				Status:      receipt.Status,
-				BlockNumber: receipt.BlockNumber.Uint64(),
-				TxHash:      receipt.TxHash.Hex(),
-				Logs:        receipt.Logs,
-			}, nil
+		for _, hash := range hashes {
+			receipt, err := s.client.TransactionReceipt(ctx, hash)
+			if err == nil && receipt != nil {
+				return receipt, nil
+			}
+			if err != nil && !errors.Is(err, ethereum.NotFound) {
+				lastErr = err
+			}
 		}
-		// Transient RPC errors are expected while the tx propagates; keep
-		// polling until the deadline rather than failing a paid settlement, but
-		// keep the last one so a timeout can say why.
-		if err != nil && !errors.Is(err, ethereum.NotFound) {
-			lastErr = err
-		}
-
 		select {
-		case <-waitCtx.Done():
-			return s.giveUp(ctx, hash, waitCtx.Err(), lastErr)
+		case <-ctx.Done():
+			return nil, lastErr
 		case <-ticker.C:
 		}
 	}
 }
 
-// giveUp ends a receipt wait that ran out of time.
+func mechReceipt(r *gethtypes.Receipt) *evmmech.TransactionReceipt {
+	return &evmmech.TransactionReceipt{
+		Status:      r.Status,
+		BlockNumber: r.BlockNumber.Uint64(),
+		TxHash:      r.TxHash.Hex(),
+		Logs:        r.Logs,
+	}
+}
+
+// outcomeBudget bounds giveUp's cancellation and its wait for an outcome. The
+// receipt wait before it ends by the settle deadline, and the HTTP server's
+// WriteTimeout is SETTLE_TIMEOUT plus 30s, so the answer still goes out.
+const outcomeBudget = 30 * time.Second
+
+// giveUp ends a receipt wait that ran out of time, with an answer that is true
+// whichever way the payment goes.
 //
-// A transaction this signer sent is cancelled (see cancel). Once the
-// cancellation is broadcast the payment cannot land, so giveUp reports a
-// failed receipt rather than an error: the mechanism then answers
-// transaction_failed with the original hash, and the payer, never charged, can
-// pay again. An error would make the SDK answer settlement_pending, telling the
-// resource server to wait for a transaction that has been replaced. A retry of
-// the same payment replays that failure from the app's settlement log; after
-// that expires the authorization is still unused, so the payment settles anew.
+// A transaction this signer sent is cancelled (see cancel), and giveUp then
+// waits for whichever of the two lands. The node accepting the cancellation
+// does not settle it: a block builder that already holds the original can
+// still mine it.
+//   - The original lands: its real receipt, so the mechanism reports the
+//     payment as settled and the payer, who was charged, as paid.
+//   - The cancellation lands: a failed receipt for the original, so the
+//     mechanism answers transaction_failed with the original hash; the payer
+//     was not charged and can pay again. A retry replays that failure from the
+//     app's settlement log; after that the authorization is still unused, so
+//     the payment settles anew.
+//   - Neither within outcomeBudget, or there is nothing to cancel: an error, so
+//     the SDK answers settlement_pending, since the original may still land.
 //
-// ponytail: if the original was mined in a block this node had not yet seen
-// when it accepted the cancellation, the payer is charged while the caller sees
-// transaction_failed; the hash it holds then shows the transfer on-chain. Wait
-// for the cancellation's receipt before answering if that window matters.
-//
-// Without a cancellation (the hash is not ours, or cancelling failed) the
-// original may still land, so the error stands and the SDK reports
-// settlement_pending.
+// ponytail: on a chain whose blocks are slower than outcomeBudget allows, the
+// third case is common and the caller is left to look the hash up. Wait longer
+// (and raise the server's WriteTimeout to match) if that matters.
 func (s *Signer) giveUp(ctx context.Context, hash common.Hash, cause, lastRPCErr error) (*evmmech.TransactionReceipt, error) {
 	err := fmt.Errorf("receipt for %s not found within %s: %w", hash.Hex(), s.cfg.ReceiptTimeout, cause)
 	if lastRPCErr != nil {
@@ -417,36 +436,54 @@ func (s *Signer) giveUp(ctx context.Context, hash common.Hash, cause, lastRPCErr
 	if stuck == nil {
 		return nil, err
 	}
-	// The caller's context is done or nearly so; the cancellation still has to
-	// reach the node.
-	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	// The caller's context is done or nearly so; the cancellation and the wait
+	// for its outcome still have to happen.
+	outcomeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), outcomeBudget)
 	defer cancel()
-	replacement, cErr := s.cancel(cancelCtx, stuck)
+
+	watch := []common.Hash{hash}
+	replacement, cErr := s.cancel(outcomeCtx, stuck)
 	if cErr != nil {
-		return nil, fmt.Errorf("%w; cancelling it failed: %w", err, cErr)
+		// Often "nonce too low": the original has just been mined.
+		err = fmt.Errorf("%w; cancelling it failed: %w", err, cErr)
+	} else {
+		watch = append(watch, replacement)
 	}
-	// The failed receipt carries no message, so the cancellation and what led
-	// to it are logged here.
-	slog.WarnContext(ctx, "unconfirmed settlement replaced with a cancellation",
-		"network", s.network, "tx", hash.Hex(), "cancellation", replacement, "cause", err)
-	return &evmmech.TransactionReceipt{Status: evmmech.TxStatusFailed, TxHash: hash.Hex()}, nil
+
+	receipt, _ := s.pollReceipt(outcomeCtx, watch...)
+	switch {
+	case receipt == nil:
+		if cErr == nil {
+			err = fmt.Errorf("%w; cancellation %s sent, neither mined within %s", err, replacement.Hex(), outcomeBudget)
+		}
+		return nil, err
+	case receipt.TxHash == hash:
+		slog.WarnContext(ctx, "settlement landed after its receipt wait timed out",
+			"network", s.network, "tx", hash.Hex(), "cause", err)
+		return mechReceipt(receipt), nil
+	default:
+		// The failed receipt carries no message, so the cancellation and what
+		// led to it are logged here.
+		slog.WarnContext(ctx, "unconfirmed settlement replaced with a cancellation",
+			"network", s.network, "tx", hash.Hex(), "cancellation", replacement.Hex(), "cause", err)
+		return &evmmech.TransactionReceipt{Status: evmmech.TxStatusFailed, TxHash: hash.Hex()}, nil
+	}
 }
 
 // cancel replaces a transaction that never confirmed with a zero-value
 // transfer to self at the same nonce, so it stops blocking every later nonce.
 //
-// It does not wait for the replacement: the next settlement simply queues
-// behind it. If the original lands first, the node rejects the replacement as
-// "nonce too low" — the settlement then went through after all, and the
-// resource server can look the hash up.
-func (s *Signer) cancel(ctx context.Context, stuck *gethtypes.Transaction) (string, error) {
+// It returns once the node accepts the replacement; giveUp waits for the
+// outcome. If the original was mined first, the node rejects the replacement
+// as "nonce too low".
+func (s *Signer) cancel(ctx context.Context, stuck *gethtypes.Transaction) (common.Hash, error) {
 	tip, feeCap, err := s.feesPerGas(ctx)
 	if err != nil {
-		return "", err
+		return common.Hash{}, err
 	}
 	tip, feeCap = replacementFees(stuck, tip, feeCap)
 	if s.cfg.MaxFeePerGasWei != nil && feeCap.Cmp(s.cfg.MaxFeePerGasWei) > 0 {
-		return "", fmt.Errorf("%w: replacement needs %s wei", ErrGasPriceTooHigh, feeCap)
+		return common.Hash{}, fmt.Errorf("%w: replacement needs %s wei", ErrGasPriceTooHigh, feeCap)
 	}
 
 	tx := gethtypes.NewTx(&gethtypes.DynamicFeeTx{
@@ -454,18 +491,18 @@ func (s *Signer) cancel(ctx context.Context, stuck *gethtypes.Transaction) (stri
 		Nonce:     stuck.Nonce(),
 		To:        &s.address,
 		Value:     big.NewInt(0),
-		Gas:       s.estimateGas(ctx, s.address, nil),
+		Gas:       params.TxGas, // a plain transfer to self
 		GasTipCap: tip,
 		GasFeeCap: feeCap,
 	})
 	signed, err := gethtypes.SignTx(tx, gethtypes.LatestSignerForChainID(s.chainID), s.key)
 	if err != nil {
-		return "", fmt.Errorf("sign replacement: %w", err)
+		return common.Hash{}, fmt.Errorf("sign replacement: %w", err)
 	}
 	if err := s.client.SendTransaction(ctx, signed); err != nil {
-		return "", fmt.Errorf("broadcast replacement: %w", err)
+		return common.Hash{}, fmt.Errorf("broadcast replacement: %w", err)
 	}
-	return signed.Hash().Hex(), nil
+	return signed.Hash(), nil
 }
 
 // replacementFees prices a same-nonce replacement. Nodes refuse one unless

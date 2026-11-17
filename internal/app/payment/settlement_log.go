@@ -55,16 +55,23 @@ func newSettlementLog(retention time.Duration) *settlementLog {
 	}
 }
 
-// settlementKey identifies a payment by its signed payload. Whitespace is
-// compacted so a retry that re-serializes the same document still matches.
+// settlementKey identifies a settlement by its signed payload and the
+// requirements it is settled against: a recorded outcome is replayed only to
+// the same request, never to one naming another payee or amount, which the
+// mechanism would have refused. Whitespace is compacted so a retry that
+// re-serializes the same documents still matches.
 func settlementKey(req payment.Request) string {
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, req.Payload); err != nil {
-		compact.Reset()
-		compact.Write(req.Payload)
+	h := sha256.New()
+	for _, doc := range [][]byte{req.Payload, req.Requirements} {
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, doc); err != nil {
+			compact.Reset()
+			compact.Write(doc)
+		}
+		h.Write(compact.Bytes())
+		h.Write([]byte{0}) // separator: no document contains a NUL byte
 	}
-	sum := sha256.Sum256(compact.Bytes())
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // begin returns the entry for key and whether the caller is the one that must

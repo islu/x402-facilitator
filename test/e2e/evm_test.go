@@ -170,21 +170,24 @@ func TestEVMPolicyRejectsWithoutGas(t *testing.T) {
 }
 
 // A settlement whose receipt never arrives is replaced at the same nonce so it
-// stops blocking the wallet. The caller sees the original hash and a failure;
-// the payer is not charged.
+// stops blocking the wallet. Once the cancellation lands, the caller sees the
+// original hash and a failure; the payer is not charged.
 func TestEVMStuckSettlementIsCancelled(t *testing.T) {
 	s, f := newEVMSetup(t, "RECEIPT_TIMEOUT=2s")
 	body := s.pay("10000")
 
 	s.chain.setAutomine(false)
-	settled := f.settle(body)
+	answer := f.settleAsync(body)
+	// The cancellation has replaced the payment in the pool, so mining lands it.
+	s.chain.pooled(s.facilitator, s.facilitator)
+	s.chain.mine()
+
+	settled := <-answer
 	require.False(t, settled.Success)
 	require.NotEmpty(t, settled.Transaction, "a broadcast settlement reports its hash")
 	// Not settlement_pending: the payment was replaced, so there is nothing to wait for.
 	assert.Equal(t, exactevm.ErrTransactionFailed, settled.ErrorReason)
 
-	// Mine the mempool: only the cancellation can land.
-	s.chain.mine()
 	_, err := s.chain.eth.TransactionReceipt(context.Background(), common.HexToHash(settled.Transaction))
 	require.ErrorIs(t, err, ethereum.NotFound, "the stuck payment must not land")
 	assert.Equal(t, uint64(1), s.chain.nonce(s.facilitator), "nonce consumed by the cancellation")
@@ -202,6 +205,36 @@ func TestEVMStuckSettlementIsCancelled(t *testing.T) {
 	next := f.settle(s.pay("20000"))
 	require.True(t, next.Success, next.ErrorReason)
 	assert.Equal(t, int64(20000), s.chain.balance(s.token, s.payTo))
+}
+
+// The node accepting a cancellation does not settle the race: a block builder
+// that already holds the original payment can still mine it. The payer is then
+// charged, so the caller must hear that the payment settled.
+func TestEVMStuckSettlementLandsAnyway(t *testing.T) {
+	s, f := newEVMSetup(t, "RECEIPT_TIMEOUT=2s")
+	body := s.pay("10000")
+
+	s.chain.setAutomine(false)
+	answer := f.settleAsync(body)
+	payment := s.chain.pooled(s.facilitator, s.token)
+	raw := s.chain.rawTx(payment) // gone from the pool once replaced
+	cancellation := s.chain.pooled(s.facilitator, s.facilitator)
+
+	// Play that builder: leave the cancellation out, include the original.
+	s.chain.drop(cancellation)
+	s.chain.sendRaw(raw)
+	s.chain.mine()
+
+	settled := <-answer
+	require.True(t, settled.Success, settled.ErrorReason)
+	assert.True(t, strings.EqualFold(payment.Hex(), settled.Transaction))
+	assert.Equal(t, int64(10000), s.chain.balance(s.token, s.payTo))
+	assert.Equal(t, int64(990000), s.chain.balance(s.token, s.buyer))
+	assert.Equal(t, uint64(1), s.chain.nonce(s.facilitator), "one transaction landed")
+	assert.Equal(t, true, s.chain.tokenCall(s.token, "authorizationState", s.buyer, authorizationNonce(t, body)))
+
+	// A retry replays the success.
+	assert.Equal(t, settled, f.settle(body))
 }
 
 // ── Chain ────────────────────────────────────────────────────────────────────
@@ -316,6 +349,46 @@ func (c *chain) nonce(addr common.Address) uint64 {
 func (c *chain) setAutomine(on bool) { c.do(nil, "evm_setAutomine", on) }
 
 func (c *chain) mine() { c.do(nil, "evm_mine") }
+
+// pooled waits until from has a transaction to `to` in the pool, and returns
+// its hash.
+func (c *chain) pooled(from, to common.Address) common.Hash {
+	c.t.Helper()
+	var found common.Hash
+	waitFor(c.t, 30*time.Second, "transaction never reached the pool", func() bool {
+		var pool struct {
+			Pending map[string]map[string]struct {
+				Hash common.Hash     `json:"hash"`
+				To   *common.Address `json:"to"`
+			} `json:"pending"`
+		}
+		c.do(&pool, "txpool_content")
+		for sender, txs := range pool.Pending {
+			if !strings.EqualFold(sender, from.Hex()) {
+				continue
+			}
+			for _, tx := range txs {
+				if tx.To != nil && *tx.To == to {
+					found = tx.Hash
+					return true
+				}
+			}
+		}
+		return false
+	})
+	return found
+}
+
+func (c *chain) rawTx(hash common.Hash) hexutil.Bytes {
+	var raw hexutil.Bytes
+	c.do(&raw, "eth_getRawTransactionByHash", hash)
+	require.NotEmpty(c.t, raw, "raw transaction %s", hash)
+	return raw
+}
+
+func (c *chain) drop(hash common.Hash) { c.do(nil, "anvil_dropTransaction", hash) }
+
+func (c *chain) sendRaw(raw hexutil.Bytes) { c.do(nil, "eth_sendRawTransaction", raw) }
 
 // ── Payments ─────────────────────────────────────────────────────────────────
 

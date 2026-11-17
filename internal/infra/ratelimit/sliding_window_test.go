@@ -182,6 +182,21 @@ func Test_Exceeded(t *testing.T) {
 	assert.False(t, limiter.Exceeded(""), "an empty key is never limited")
 }
 
+// Exceeded expiring an event must not leave it counted twice afterwards.
+func Test_Exceeded_AfterExpiryCountsOnce(t *testing.T) {
+	now := time.Now()
+	limiter := New(3, time.Minute)
+	limiter.now = func() time.Time { return now }
+	for _, offset := range []time.Duration{0, 30 * time.Second, 50 * time.Second} {
+		limiter.now = func() time.Time { return now.Add(offset) }
+		require.True(t, limiter.Allow("0xabc"))
+	}
+
+	limiter.now = func() time.Time { return now.Add(61 * time.Second) }
+	require.False(t, limiter.Exceeded("0xabc"), "first event expired: two live")
+	assert.True(t, limiter.Allow("0xabc"), "third live event fits the quota of 3")
+}
+
 // One-shot keys must not pile up when nothing calls Cleanup.
 func Test_Allow_PrunesAgedOutKeys(t *testing.T) {
 	now := time.Now()

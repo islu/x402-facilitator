@@ -309,6 +309,17 @@ func Test_Load_Errors(t *testing.T) {
 			wantErr: "minimum exceeds its maximum",
 		},
 		{
+			// The policy keys hex addresses case-insensitively; both entries
+			// passing would let the later one replace the other's bounds.
+			name: "one allowed asset spelled twice",
+			env: map[string]string{
+				"EVM_RPC_URLS":    "eip155:84532=https://sepolia.base.org",
+				"EVM_PRIVATE_KEY": "0xabc",
+				"ALLOWED_ASSETS":  "eip155:84532/0xAAA=1000,eip155:84532/0xaaa=5:1000000",
+			},
+			wantErr: "are the same asset",
+		},
+		{
 			name: "the admin port shared with the public port",
 			env: map[string]string{
 				"EVM_RPC_URLS":    "eip155:84532=https://sepolia.base.org",

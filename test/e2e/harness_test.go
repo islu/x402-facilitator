@@ -140,6 +140,14 @@ func (f *facilitator) settle(body []byte) settleResponse {
 	return out
 }
 
+// settleAsync sends a settlement and returns where its answer will arrive, so
+// a test can act on the chain while the facilitator waits on it.
+func (f *facilitator) settleAsync(body []byte) <-chan settleResponse {
+	answer := make(chan settleResponse, 1)
+	go func() { answer <- f.settle(body) }()
+	return answer
+}
+
 // settleConcurrently sends the same payment n times at once, as a resource
 // server retrying on a timeout would.
 func (f *facilitator) settleConcurrently(body []byte, n int) []settleResponse {
