@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	x402sdk "github.com/x402-foundation/x402/go/v2"
 	evmclient "github.com/x402-foundation/x402/go/v2/mechanisms/evm/exact/client"
 	evmsigners "github.com/x402-foundation/x402/go/v2/signers/evm"
 	"github.com/x402-foundation/x402/go/v2/types"
@@ -332,7 +333,7 @@ func evmPay(t *testing.T, buyer *ecdsa.PrivateKey, req types.PaymentRequirements
 	t.Helper()
 	signer, err := evmsigners.NewClientSignerFromPrivateKey(hex.EncodeToString(crypto.FromECDSA(buyer)))
 	require.NoError(t, err)
-	payload, err := evmclient.NewExactEvmScheme(signer, nil).CreatePaymentPayload(context.Background(), req)
+	payload, err := evmclient.NewExactEvmScheme(signer, nil).CreatePaymentPayload(context.Background(), req, x402sdk.PaymentPayloadContext{})
 	require.NoError(t, err)
 	return paymentBody(t, payload, req)
 }

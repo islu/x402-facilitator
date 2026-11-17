@@ -16,6 +16,7 @@ import (
 	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	x402sdk "github.com/x402-foundation/x402/go/v2"
 	"github.com/x402-foundation/x402/go/v2/mechanisms/svm"
 	svmclient "github.com/x402-foundation/x402/go/v2/mechanisms/svm/exact/client"
 	svmsigners "github.com/x402-foundation/x402/go/v2/signers/svm"
@@ -179,11 +180,6 @@ func startValidator(t *testing.T) *validator {
 		return err == nil
 	})
 	v.network = "solana:" + genesis.String()[:32]
-
-	// The SDK's client builds payments only for the clusters it knows; teach it
-	// this one. The facilitator itself accepts any cluster it is configured for.
-	svm.NetworkConfigs[v.network] = svm.NetworkConfig{Name: "localnet", CAIP2: v.network, RPCURL: v.url}
-	t.Cleanup(func() { delete(svm.NetworkConfigs, v.network) })
 	return v
 }
 
@@ -302,7 +298,13 @@ func (v *validator) pay(t *testing.T, buyer solana.PrivateKey, req types.Payment
 	t.Helper()
 	signer, err := svmsigners.NewClientSignerFromPrivateKey(buyer.String())
 	require.NoError(t, err)
-	payload, err := svmclient.NewExactSvmScheme(signer, &svm.ClientConfig{RPCURL: v.url}).CreatePaymentPayload(context.Background(), req)
+	// The SDK's client builds payments only for mainnet, devnet and testnet; the
+	// facilitator accepts any cluster it is configured for. The transaction does
+	// not name its cluster, so build it as devnet against this validator's RPC
+	// and send it under the local network (paymentBody resets Accepted).
+	build := req
+	build.Network = svm.SolanaDevnetCAIP2
+	payload, err := svmclient.NewExactSvmScheme(signer, &svm.ClientConfig{RPCURL: v.url}).CreatePaymentPayload(context.Background(), build, x402sdk.PaymentPayloadContext{})
 	require.NoError(t, err)
 	return paymentBody(t, payload, req)
 }

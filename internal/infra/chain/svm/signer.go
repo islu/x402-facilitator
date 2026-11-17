@@ -145,12 +145,11 @@ func (s *Signer) SignTransaction(_ context.Context, tx *solana.Transaction, feeP
 }
 
 // SimulateTransaction checks the transaction would succeed before broadcasting.
-func (s *Signer) SimulateTransaction(ctx context.Context, tx *solana.Transaction, _ string) error {
-	result, err := s.client.SimulateTransactionWithOpts(ctx, tx, &rpc.SimulateTransactionOpts{
-		SigVerify:              true,
-		ReplaceRecentBlockhash: false,
-		Commitment:             svmmech.DefaultCommitment,
-	})
+//
+// The SDK simulates during verify, before the fee payer signs, and checks the
+// client's signatures locally; nil opts therefore leave RPC sigVerify off.
+func (s *Signer) SimulateTransaction(ctx context.Context, tx *solana.Transaction, _ string, opts *svmmech.FacilitatorSimulateTransactionOptions) error {
+	result, err := s.client.SimulateTransactionWithOpts(ctx, tx, svmmech.SimulationRPCOpts(opts))
 	if err != nil {
 		return fmt.Errorf("simulate transaction: %w", err)
 	}

@@ -1,6 +1,6 @@
 # The build stage runs on the builder's own platform and cross-compiles, so a
 # multi-arch build needs no emulation.
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine AS build
 
 WORKDIR /src
 
