@@ -95,7 +95,7 @@ func NewProcessor(
 		// is what stops a client from spending one Solana payment twice.
 		cache := svmmech.NewSettlementCache()
 		facilitator.Register([]x402sdk.Network{x402sdk.Network(network.Network)},
-			exactsvm.NewExactSvmScheme(signer, cache))
+			exactsvm.NewExactSvmScheme(signer, &exactsvm.Config{SettlementCache: cache}))
 		if network.V1Alias != "" {
 			facilitator.RegisterV1([]x402sdk.Network{x402sdk.Network(network.V1Alias)},
 				exactsvmv1.NewExactSvmSchemeV1(signer, cache))

@@ -126,46 +126,42 @@ func Test_Enabled(t *testing.T) {
 	}
 }
 
-func Test_Cleanup(t *testing.T) {
-	tests := []struct {
-		name         string
-		limit        int
-		elapsed      time.Duration
-		wantRetained int
-	}{
-		{
-			name:         "keys whose attempts aged out are dropped",
-			limit:        5,
-			elapsed:      2 * time.Minute,
-			wantRetained: 0,
-		},
-		{
-			name:         "keys still inside the window are kept",
-			limit:        5,
-			elapsed:      30 * time.Second,
-			wantRetained: 1,
-		},
-		{
-			name:         "a disabled limiter has nothing to clean",
-			limit:        0,
-			elapsed:      2 * time.Minute,
-			wantRetained: 0,
-		},
+func Test_Exceeded(t *testing.T) {
+	limiter := New(1, time.Minute)
+
+	assert.False(t, limiter.Exceeded("0xabc"))
+	assert.False(t, limiter.Exceeded("0xabc"), "checking twice records nothing")
+	require.True(t, limiter.Allow("0xabc"))
+	assert.True(t, limiter.Exceeded("0xabc"))
+	assert.False(t, limiter.Exceeded(""), "an empty key is never limited")
+}
+
+// Exceeded expiring an event must not leave it counted twice afterwards.
+func Test_Exceeded_AfterExpiryCountsOnce(t *testing.T) {
+	now := time.Now()
+	limiter := New(3, time.Minute)
+	limiter.now = func() time.Time { return now }
+	for _, offset := range []time.Duration{0, 30 * time.Second, 50 * time.Second} {
+		limiter.now = func() time.Time { return now.Add(offset) }
+		require.True(t, limiter.Allow("0xabc"))
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			now := time.Now()
-			limiter := New(tt.limit, time.Minute)
-			limiter.now = func() time.Time { return now }
-			require.True(t, limiter.Allow("0xabc"))
+	limiter.now = func() time.Time { return now.Add(61 * time.Second) }
+	require.False(t, limiter.Exceeded("0xabc"), "first event expired: two live")
+	assert.True(t, limiter.Allow("0xabc"), "third live event fits the quota of 3")
+}
 
-			now = now.Add(tt.elapsed)
-			limiter.Cleanup()
+// One-shot keys must not pile up when nothing calls Cleanup.
+func Test_Allow_PrunesAgedOutKeys(t *testing.T) {
+	now := time.Now()
+	limiter := New(5, time.Minute)
+	limiter.now = func() time.Time { return now }
+	require.True(t, limiter.Allow("0xabc"))
 
-			limiter.mu.Lock()
-			defer limiter.mu.Unlock()
-			assert.Len(t, limiter.hits, tt.wantRetained)
-		})
-	}
+	now = now.Add(2 * time.Minute)
+	require.True(t, limiter.Allow("0xdef"))
+
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	assert.NotContains(t, limiter.hits, "0xabc")
 }

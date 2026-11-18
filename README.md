@@ -1,5 +1,10 @@
 # x402-facilitator
 
+[![CI](https://github.com/islu/x402-facilitator/actions/workflows/ci.yml/badge.svg)](https://github.com/islu/x402-facilitator/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/islu/x402-facilitator/actions/workflows/codeql.yml/badge.svg)](https://github.com/islu/x402-facilitator/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/islu/x402-facilitator)](https://github.com/islu/x402-facilitator/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A production-shaped [x402](https://github.com/x402-foundation/x402) payment facilitator in Go.
 
 A facilitator sits between resource servers and the chain: it **verifies** payment
@@ -17,6 +22,11 @@ Client ──▶ Resource Server ──▶ Facilitator ──▶ Network
 Built on [`github.com/x402-foundation/x402/go/v2`](https://github.com/x402-foundation/x402/tree/main/go),
 following the structure in the SDK's [FACILITATOR.md](https://github.com/x402-foundation/x402/blob/main/go/FACILITATOR.md).
 
+> **Status: v0.x — for testnets and limited pilots.** Settlement deduplication
+> is in-process and there is no durable ledger, so do not put significant
+> funds behind it. Versioning and compatibility before and after 1.0:
+> [CONTRIBUTING.md](CONTRIBUTING.md#releases).
+
 ## What's included
 
 | Capability | Where |
@@ -26,7 +36,8 @@ following the structure in the SDK's [FACILITATOR.md](https://github.com/x402-fo
 | x402 SDK adapter: scheme registration, error translation | [internal/infra/x402/](internal/infra/x402/) |
 | EVM signer: EIP-712 recovery, EIP-1559 fees, nonce serialization, receipt polling | [internal/infra/chain/evm/signer.go](internal/infra/chain/evm/signer.go) |
 | Solana signer: co-sign, simulate, send, confirm | [internal/infra/chain/svm/signer.go](internal/infra/chain/svm/signer.go) |
-| `/verify`, `/settle`, `/supported` + `/healthz`, `/readyz`, `/metrics` | [internal/transport/http/](internal/transport/http/) |
+| `/verify`, `/settle`, `/supported` + `/healthz`, `/readyz`; `/metrics` on a separate admin port | [internal/transport/http/](internal/transport/http/) |
+| Asset allowlist with per-asset min/max, idempotent `/settle`, stuck-transaction cancellation | [policy.go](internal/domain/payment/policy.go), [settlement_log.go](internal/app/payment/settlement_log.go), [signer.go](internal/infra/chain/evm/signer.go) |
 | Wallet balance monitoring | [internal/app/wallet/](internal/app/wallet/) |
 | Env-driven config with fail-fast validation | [internal/config/config.go](internal/config/config.go) |
 
@@ -37,9 +48,12 @@ Schemes registered per configured network:
 
 ## Quick start
 
-The toolchain is pinned with [devbox](https://www.jetify.com/devbox) (Go,
-golangci-lint, go-task) — `devbox shell` gets you the same versions CI uses. Any
-Go 1.24+ toolchain works too; devbox is a convenience, not a requirement.
+The dev tools are pinned with [devbox](https://www.jetify.com/devbox) (Go,
+golangci-lint, go-task, govulncheck) — `devbox shell`, then run everything
+through `task`. wire and mockgen are pinned in go.mod's `tool` block and run
+with `go tool`. Any Go 1.21+ toolchain works too; it downloads the version
+go.mod requires. The Docker image may build with a newer patch release than
+devbox has packaged — `task vulncheck` scans against the image's version.
 
 ```bash
 devbox shell            # or bring your own Go toolchain
@@ -63,6 +77,16 @@ curl localhost:4022/supported
   "signers": { "eip155": ["0x…"] }
 }
 ```
+
+Or run a released image (amd64 and arm64):
+
+```bash
+docker run --env-file .env -p 4022:4022 ghcr.io/islu/x402-facilitator:0.1
+```
+
+Each image carries an SBOM and a build provenance attestation; check that it was
+built from this repository with
+`gh attestation verify oci://ghcr.io/islu/x402-facilitator:0.1 --owner islu`.
 
 Point a resource server at it:
 
@@ -88,8 +112,10 @@ Everything is environment-driven; a `.env` file is loaded if present. See
 | `EVM_PRIVATE_KEY` | — | Settlement wallet, overridable per network via `EVM_PRIVATE_KEYS` |
 | `SVM_RPC_URLS` / `SVM_PRIVATE_KEY` | — | Same, for Solana (optional) |
 | `PORT` | `4022` | Listen port |
-| `RATE_LIMIT_PER_MINUTE` | `0` (off) | Verify+settle calls allowed per payer |
-| `MAX_SETTLE_AMOUNT` | unlimited | Per-settlement ceiling, in atomic units |
+| `ADMIN_PORT` | `9090` | `/metrics` only; expose to the scraper, not the internet |
+| `ALLOWED_ASSETS` | empty (any) | `network/asset=max` or `=min:max`, atomic units. **Set it in production** — otherwise the wallet pays gas to settle any token |
+| `RATE_LIMIT_PER_MINUTE` | `0` (off) | Accepted verify+settle calls per payer |
+| `RATE_LIMIT_PER_IP_PER_MINUTE` | `0` (off) | All verify+settle calls per caller IP — the bound on forged or junk traffic |
 | `MAX_GAS_PRICE_GWEI` | uncapped | Refuse to broadcast above this fee |
 | `EIP6492_ALLOWED_FACTORIES` | empty (deny) | Smart-wallet factories allowed during settlement |
 | `VERIFY_TIMEOUT` / `SETTLE_TIMEOUT` | `30s` / `90s` | Per-request budgets |
@@ -145,7 +171,7 @@ Registered `(version, scheme, network)` triples plus the settlement addresses.
 
 - `GET /healthz` — process liveness
 - `GET /readyz` — `503` when no network is usable, so a load balancer can drain the instance
-- `GET /metrics` — Prometheus text format
+- `GET /metrics` — Prometheus text format, on `ADMIN_PORT` only
 
 ## Architecture
 
@@ -182,7 +208,7 @@ provider sets in `internal/{app,infra}/provider.go`, injector in
 | --- | --- |
 | Add a network | an entry in `EVM_RPC_URLS` — no code |
 | Add a payment scheme | register it in [`infra/x402.NewProcessor`](internal/infra/x402/facilitator.go) |
-| Persist settlements | `SettlePayment` in [app/payment](internal/app/payment/settle_payment.go), where the transaction hash and payer are both known |
+| Persist settlements | replace the in-memory [`settlementLog`](internal/app/payment/settlement_log.go), which already sees every settlement's key, hash and outcome |
 | Add a policy (fraud rules, allowlists) | a check in the use case, or a method on [`payment.Policy`](internal/domain/payment/policy.go) |
 | Swap metric storage or the rate limiter | a new adapter under `internal/infra` — the ports do not move |
 | Add auth | middleware in [transport/http](internal/transport/http/router.go); the endpoints are unauthenticated by design, since a facilitator normally serves many resource servers |
@@ -202,13 +228,28 @@ the signing calls in
 nothing else in the codebase touches the key.
 
 **Gas.** `facilitator_wallet_balance` is exported per network and warned on below
-`MIN_BALANCE_WEI`. Alert on it: a facilitator out of gas keeps verifying happily
-while every settlement fails.
+`MIN_BALANCE_WEI` (EVM) or `MIN_BALANCE_LAMPORTS` (Solana). Alert on it: a
+facilitator out of gas keeps verifying happily while every settlement fails.
+`ALLOWED_ASSETS` is the other half: without it anyone can deploy a worthless
+EIP-3009 token and have your wallet pay gas to move it.
 
-**Scaling.** Instances are stateless apart from two things: nonces are serialized
-per process, so **each replica needs its own settlement wallet** or they will
-fight over nonces; and the rate limiter is in-process, so a cluster-wide limit
-needs a shared store.
+**Stuck transactions.** A settlement still unmined after `RECEIPT_TIMEOUT` is
+replaced at the same nonce by a zero-value self-transfer at a higher fee, so one
+underpriced transaction cannot block every later one. A block builder may still
+mine the original, so the facilitator then waits up to 30 seconds for whichever
+lands: the payment (the response reports success), the cancellation (failure
+with the original hash; the payer was not charged), or neither
+(`settlement_pending` with the original hash, which may still land). The
+cancellation's hash is logged.
+
+**Idempotency.** A `/settle` retry for the same payload joins the attempt in
+flight, or — once a transaction was broadcast — gets the recorded outcome for
+10 minutes instead of a second transaction.
+
+**Scaling.** Instances are stateless apart from three things, all in-process:
+nonces are serialized per process, so **each replica needs its own settlement
+wallet**; the rate limiters need a shared store for a cluster-wide limit; and
+the settlement log only deduplicates retries that reach the same replica.
 
 **Timeouts.** Verification is a signature check; settlement waits on block
 inclusion. `RECEIPT_TIMEOUT` must stay below `SETTLE_TIMEOUT`, which is enforced
@@ -218,9 +259,10 @@ at startup.
 before the first confirms, and the RPC reports success both times. The shared
 `SettlementCache` rejects the second attempt with `duplicate_settlement`.
 
-**Metrics.** `facilitator_verifications_total`, `facilitator_settlements_total`,
+**Metrics.** Served on `ADMIN_PORT`. `facilitator_verifications_total`, `facilitator_settlements_total`,
 `facilitator_verify_failures_total`, `facilitator_settle_failures_total`,
-`facilitator_rate_limited_total`, `facilitator_wallet_balance`, and duration
+`facilitator_rate_limited_total`, `facilitator_settle_rejected_total`,
+`facilitator_wallet_balance`, and duration
 histograms for verify and settle. Alert on settlement failure rate and confirmation
 latency, not just error counts.
 
@@ -246,6 +288,7 @@ internal/transport/http/
   handler/                  protocol + system endpoints
   middleware/ response/     logging, recovery, response shapes
 internal/mocks/domain/      generated port mocks (mockgen)
+test/e2e/                   end-to-end suite on local EVM and Solana chains
 ```
 
 ## Development
@@ -256,13 +299,26 @@ Tasks are defined in [Taskfile.yml](Taskfile.yml); `task` alone lists them.
 task check         # fmt + vet + lint + test
 task test:race     # tests under the race detector
 task test:cover    # coverage summary
+task e2e           # end-to-end suite on a local chain
 task generate      # wire + mockgen
 task docker:build  # container image
 ```
 
-`devbox run check` runs the same thing inside the pinned toolchain. Note that
-devbox sets `GOPATH=$PWD/.go`, so its first run downloads dependencies into the
-project directory (git-ignored) rather than reusing the global module cache.
+The lint configuration ([.golangci.yml](.golangci.yml)) groups its linters by
+bugs, security, performance, refactoring and tests, and enables only linters
+whose upstream is still maintained. `task fmt` applies gofumpt and goimports.
+
+[CI](.github/workflows) runs `task check`, the race detector, `task e2e` and
+`task vulncheck` inside devbox, and builds the Docker image, on every push to
+`main` and every pull request. It also runs
+CodeQL on the Go code and the workflows, and reviews new dependencies on pull
+requests. The CI and CodeQL workflows also run weekly, so a newly published
+vulnerability shows up without a commit. Dependabot keeps Go modules, actions
+and the Docker base image current.
+
+Run the tasks from a `devbox shell` to get the pinned tools. Note that devbox
+sets `GOPATH=$PWD/.go`, so its first run downloads dependencies into the project
+directory (git-ignored) rather than reusing the global module cache.
 
 Tests are table-driven and use testify. They run without a network: the use
 cases drive a mocked `Processor` port (`task mockgen` regenerates the mocks from
@@ -271,9 +327,63 @@ port path, and the rest cover config validation, document parsing, the
 settlement ceiling, error translation, EIP-712 verification and the metrics
 registry.
 
-Verifying against a real chain needs testnet funds; point `EVM_RPC_URLS` at Base
-Sepolia and drive it with the
+`task e2e` runs the built binary against local chains and checks the outcome on
+chain — wallet nonce or fee-payer transactions, token balances, authorization
+state:
+
+- EVM, on [anvil](https://getfoundry.sh) with an EIP-3009 token compiled from
+  `test/e2e/testdata`: verify, settle, concurrent and repeated settles of one
+  payment, policy rejections that must not spend gas, and a stuck transaction
+  (automine off) that must be cancelled at the same nonce — or reported as
+  settled when the original is mined anyway.
+- Solana, on `solana-test-validator` with a fresh SPL mint: verify, settle,
+  concurrent and repeated settles, and policy rejections. Its setup waits for
+  finality (about 13 seconds per test), since the x402 client reads at
+  finalized commitment.
+
+Each test starts its own chain and generates its own keys, so the suite needs
+no funds and no network. anvil, solc and solana-test-validator come with the
+devbox environment.
+
+Verifying against a public chain needs testnet funds; point `EVM_RPC_URLS` at
+Base Sepolia and drive it with the
 [x402 Go client](https://github.com/x402-foundation/x402/blob/main/go/CLIENT.md).
+
+## Roadmap
+
+The project is in maintenance mode. What that covers:
+
+- **Maintenance** — releases on GitHub, upgrades to new x402 Go SDK versions,
+  dependency and vulnerability updates, and fixes for reported bugs.
+- **Small improvements, when time allows:**
+  - make `ALLOWED_ASSETS` mandatory in production;
+  - check at startup that every allowed token is a contract supporting
+    `transferWithAuthorization`, with a readable EIP-712 domain;
+  - apply the per-payer quota on Solana by reading the transfer authority from
+    the transaction.
+- **Not planned, open to revisit if real users need them:**
+  - a durable, shared settlement ledger, and the features built on it —
+    recovering settlements that land after a timeout, and speeding up stuck
+    transactions instead of cancelling them;
+  - RPC failover;
+  - KMS signing;
+  - sanctions screening;
+  - multi-replica deployments.
+
+  If you need one of these, open an issue describing your use case.
+- **Out of scope:** multi-tenancy, routing across facilitators, and a hosted
+  service.
+
+## Support
+
+This is a side project, maintained on a best-effort basis. Questions and bug
+reports go to [GitHub issues](https://github.com/islu/x402-facilitator/issues);
+there is no paid support or managed service.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as
+described in [SECURITY.md](SECURITY.md) — never in a public issue.
 
 ## License
 

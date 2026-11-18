@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"cmp"
 	"encoding/json"
 	"math/big"
 	"strings"
@@ -22,40 +23,68 @@ var payerPaths = [][]string{
 // payment mechanism, which owns the authoritative validation and will reject it
 // with a precise reason. Failing here instead would answer a malformed document
 // with a vaguer error than the mechanism would have given.
+//
+// The fields policy acts on are decoded the way the SDK decodes them, so the
+// allowlist judges the asset and amount that will actually be settled: the
+// version comes from the payload's x402Version, the requirements go into a
+// typed struct through encoding/json (whose case-insensitive, last-wins field
+// matching a map lookup would not reproduce), and the amount field is the one
+// the version uses.
 func ParseMetadata(req Request) Metadata {
-	payload := decodeObject(req.Payload)
-	requirements := decodeObject(req.Requirements)
+	var doc payloadDoc
+	_ = json.Unmarshal(req.Payload, &doc)
+	var requirements requirementsDoc
+	_ = json.Unmarshal(req.Requirements, &requirements)
 
 	// The scheme-specific authorization sits under the document's "payload"
 	// key in both protocol versions; the document root is only searched as a
 	// fallback for callers that hand over the inner object directly.
+	payload := decodeObject(req.Payload)
 	inner, _ := payload["payload"].(map[string]any)
 
-	meta := Metadata{
-		Payer: normalizePayer(lookupPayer(inner, payload)),
-	}
-
-	if version, ok := numberAt(payload, "x402Version"); ok {
-		meta.Version = version
-	}
-
 	// v2 nests the accepted requirements inside the payload; v1 keeps scheme and
-	// network at the top level. The requirements document is preferred when both
-	// carry the field, since that is what settlement is measured against.
-	accepted, _ := payload["accepted"].(map[string]any)
-	meta.Scheme = firstString(requirements, accepted, payload)("scheme")
-	meta.Network = firstString(requirements, accepted, payload)("network")
-
-	// v1 calls it maxAmountRequired, v2 calls it amount.
-	amount := firstString(requirements, accepted)("amount")
-	if amount == "" {
-		amount = firstString(requirements, accepted)("maxAmountRequired")
+	// network at the top level. The requirements document wins, since that is
+	// what settlement is measured against.
+	meta := Metadata{
+		Version: doc.X402Version,
+		Payer:   normalizeAddress(lookupPayer(inner, payload)),
+		Scheme:  cmp.Or(requirements.Scheme, doc.Accepted.Scheme, doc.Scheme),
+		Network: cmp.Or(requirements.Network, doc.Accepted.Network, doc.Network),
+		Asset:   normalizeAddress(cmp.Or(requirements.Asset, doc.Accepted.Asset)),
 	}
+	amount := cmp.Or(requirements.amount(doc.X402Version), doc.Accepted.amount(doc.X402Version))
 	if parsed, ok := new(big.Int).SetString(amount, 10); ok {
 		meta.Amount = parsed
 	}
-
 	return meta
+}
+
+// payloadDoc is the part of a payment payload ParseMetadata reads by type.
+type payloadDoc struct {
+	X402Version int             `json:"x402Version"`
+	Scheme      string          `json:"scheme"`
+	Network     string          `json:"network"`
+	Accepted    requirementsDoc `json:"accepted"`
+}
+
+// requirementsDoc mirrors the SDK's PaymentRequirements (v2) and
+// PaymentRequirementsV1 field names.
+type requirementsDoc struct {
+	Scheme            string `json:"scheme"`
+	Network           string `json:"network"`
+	Asset             string `json:"asset"`
+	Amount            string `json:"amount"`
+	MaxAmountRequired string `json:"maxAmountRequired"`
+}
+
+// amount is the field the SDK settles for version: v1 names it
+// maxAmountRequired, v2 amount. Reading by version rather than by whichever
+// is present keeps an unrelated field from steering the policy.
+func (r requirementsDoc) amount(version int) string {
+	if version == 1 {
+		return r.MaxAmountRequired
+	}
+	return r.Amount
 }
 
 func decodeObject(raw []byte) map[string]any {
@@ -67,28 +96,6 @@ func decodeObject(raw []byte) map[string]any {
 		return nil
 	}
 	return out
-}
-
-// firstString returns a lookup that reads a key from the first source that has
-// it as a non-empty string.
-func firstString(sources ...map[string]any) func(key string) string {
-	return func(key string) string {
-		for _, source := range sources {
-			if value, ok := source[key].(string); ok && value != "" {
-				return value
-			}
-		}
-		return ""
-	}
-}
-
-func numberAt(source map[string]any, key string) (int, bool) {
-	// JSON numbers decode to float64 through map[string]any.
-	value, ok := source[key].(float64)
-	if !ok {
-		return 0, false
-	}
-	return int(value), true
 }
 
 // lookupPayer searches each source in order for a known payer location.
@@ -126,12 +133,18 @@ func stringAtPath(payload map[string]any, path []string) (string, bool) {
 	return "", false
 }
 
-// normalizePayer lowercases hex addresses so mixed-case (EIP-55 checksummed)
-// spellings of one address are treated as the same payer. Non-hex identifiers
+// normalizeAddress lowercases hex addresses so mixed-case (EIP-55 checksummed)
+// spellings of one address are treated as the same account. Non-hex identifiers
 // such as Solana base58 keys are case-sensitive and left untouched.
-func normalizePayer(payer string) string {
-	if strings.HasPrefix(payer, "0x") || strings.HasPrefix(payer, "0X") {
-		return strings.ToLower(payer)
+func normalizeAddress(address string) string {
+	if strings.HasPrefix(address, "0x") || strings.HasPrefix(address, "0X") {
+		return strings.ToLower(address)
 	}
-	return payer
+	return address
+}
+
+// AssetKey identifies one asset on one network, in the form the settlement
+// policy is keyed by.
+func AssetKey(network, asset string) string {
+	return network + "/" + normalizeAddress(asset)
 }

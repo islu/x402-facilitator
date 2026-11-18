@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +18,8 @@ import (
 
 	apppayment "github.com/islu/x402-facilitator/internal/app/payment"
 	"github.com/islu/x402-facilitator/internal/domain/payment"
+	"github.com/islu/x402-facilitator/internal/domain/ratelimit"
+	infraratelimit "github.com/islu/x402-facilitator/internal/infra/ratelimit"
 	"github.com/islu/x402-facilitator/internal/infra/telemetry"
 	mocks "github.com/islu/x402-facilitator/internal/mocks/domain"
 	"github.com/islu/x402-facilitator/internal/transport/http/middleware"
@@ -40,31 +41,48 @@ const (
 }`
 )
 
-var errRPCDown = errors.New("rpc endpoint unreachable")
+// errRPCDown carries a provider URL with an API key, the way go-ethereum's RPC
+// errors do, so tests can check it never reaches a response body.
+var errRPCDown = errors.New(`post "https://base-sepolia.example/v2/SECRET-API-KEY": dial tcp: connection refused`)
 
-// newTestRouter wires the real payment service over a mocked processor, so the
-// tests exercise the same handler → use case → port path production uses.
-func newTestRouter(ctrl *gomock.Controller) (http.Handler, *mocks.MockProcessor) {
+// testServer is the public and admin routers wired over the real payment
+// service and a mocked processor, so the tests exercise the same handler → use
+// case → port path production uses.
+type testServer struct {
+	public    http.Handler
+	admin     http.Handler
+	processor *mocks.MockProcessor
+}
+
+func newTestServer(ctrl *gomock.Controller, clients ratelimit.Limiter) testServer {
 	processor := mocks.NewMockProcessor(ctrl)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	registry := telemetry.New()
 
 	service := apppayment.NewService(processor, disabledLimiter{}, registry, payment.Policy{}, logger)
 	h := NewHandler(service, registry, Timeouts{Verify: time.Second, Settle: time.Second})
 
 	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.Use(middleware.Recovery(logger))
-	RegisterPaymentRoutes(router, h)
-	RegisterSystemRoutes(router, h)
+	public := gin.New()
+	public.Use(middleware.Recovery(logger))
+	RegisterPaymentRoutes(public, h, middleware.RateLimit(clients))
+	RegisterSystemRoutes(public, h)
 
-	return router, processor
+	admin := gin.New()
+	RegisterAdminRoutes(admin, h)
+
+	return testServer{public: public, admin: admin, processor: processor}
+}
+
+func newTestRouter(ctrl *gomock.Controller) (http.Handler, *mocks.MockProcessor) {
+	server := newTestServer(ctrl, disabledLimiter{})
+	return server.public, server.processor
 }
 
 type disabledLimiter struct{}
 
-func (disabledLimiter) Allow(string) bool { return true }
-func (disabledLimiter) Enabled() bool     { return false }
+func (disabledLimiter) Allow(string) bool    { return true }
+func (disabledLimiter) Exceeded(string) bool { return false }
 
 func post(t *testing.T, handler http.Handler, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -78,7 +96,7 @@ func post(t *testing.T, handler http.Handler, path, body string) *httptest.Respo
 func get(t *testing.T, handler http.Handler, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, http.NoBody))
 	return rec
 }
 
@@ -285,7 +303,7 @@ func Test_Verify_ForwardsDocumentsVerbatim(t *testing.T) {
 
 	var forwarded map[string]any
 	require.NoError(t, json.Unmarshal(seen.Payload, &forwarded))
-	assert.Equal(t, float64(2), forwarded["x402Version"])
+	assert.InDelta(t, 2, forwarded["x402Version"], 0)
 	assert.Contains(t, forwarded, "payload")
 }
 
@@ -382,15 +400,84 @@ func Test_SystemRoutes(t *testing.T) {
 
 func Test_Metrics(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	router, processor := newTestRouter(ctrl)
-	processor.EXPECT().
+	server := newTestServer(ctrl, disabledLimiter{})
+	server.processor.EXPECT().
 		Verify(gomock.Any(), gomock.Any()).
 		Return(payment.VerifyResult{IsValid: true}, nil)
-	post(t, router, "/verify", validBody)
 
-	rec := get(t, router, "/metrics")
+	post(t, server.public, "/verify", validBody)
+	rec := get(t, server.admin, "/metrics")
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
 	assert.Contains(t, rec.Body.String(), "facilitator_verifications_total")
+	// Wallet balances and traffic are for operators, not every caller.
+	assert.Equal(t, http.StatusNotFound, get(t, server.public, "/metrics").Code)
+}
+
+// RPC errors embed the provider URL, and with it the API key; a caller must
+// only learn that it should retry.
+func Test_SystemErrorHidesCause(t *testing.T) {
+	for _, path := range []string{"/verify", "/settle"} {
+		t.Run(path, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			router, processor := newTestRouter(ctrl)
+			processor.EXPECT().Verify(gomock.Any(), gomock.Any()).Return(payment.VerifyResult{}, errRPCDown).AnyTimes()
+			processor.EXPECT().Settle(gomock.Any(), gomock.Any()).Return(payment.SettleResult{}, errRPCDown).AnyTimes()
+
+			rec := post(t, router, path, validBody)
+
+			require.Equal(t, http.StatusInternalServerError, rec.Code)
+			assert.NotContains(t, rec.Body.String(), "SECRET-API-KEY")
+		})
+	}
+}
+
+// A verdict is answered with 200 and its reason, but the mechanism's detail —
+// which can quote an RPC error — stays in the log.
+func Test_VerdictHidesDetail(t *testing.T) {
+	detail := errRPCDown.Error()
+	for _, path := range []string{"/verify", "/settle"} {
+		t.Run(path, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			router, processor := newTestRouter(ctrl)
+			processor.EXPECT().Verify(gomock.Any(), gomock.Any()).Return(payment.VerifyResult{},
+				payment.NewVerificationError("invalid_exact_evm_failed_to_verify_signature", "", testPayer).WithDetail(detail)).AnyTimes()
+			processor.EXPECT().Settle(gomock.Any(), gomock.Any()).Return(payment.SettleResult{},
+				payment.NewSettlementError("settlement_pending", "", testPayer, testNetwork, "0xdead").WithDetail(detail)).AnyTimes()
+
+			rec := post(t, router, path, validBody)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Regexp(t, "invalid_exact_evm_failed_to_verify_signature|settlement_pending", rec.Body.String())
+			assert.NotContains(t, rec.Body.String(), "SECRET-API-KEY")
+		})
+	}
+}
+
+func Test_OversizedBody(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	router, _ := newTestRouter(ctrl)
+	body := `{"paymentPayload": {"pad": "` + strings.Repeat("a", maxBodyBytes) + `"}}`
+
+	rec := post(t, router, "/verify", body)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+}
+
+// Unproven traffic — forged or junk payloads — is bounded per caller IP before
+// it costs an RPC call; /supported is a cheap read and stays open.
+func Test_ClientRateLimit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	server := newTestServer(ctrl, infraratelimit.New(1, time.Minute))
+	server.processor.EXPECT().
+		Verify(gomock.Any(), gomock.Any()).
+		Return(payment.VerifyResult{IsValid: true}, nil).
+		Times(1)
+	server.processor.EXPECT().Supported(gomock.Any()).Return(payment.Supported{}).AnyTimes()
+
+	assert.Equal(t, http.StatusOK, post(t, server.public, "/verify", validBody).Code)
+	assert.Equal(t, http.StatusTooManyRequests, post(t, server.public, "/settle", validBody).Code,
+		"verify and settle share the caller's quota")
+	assert.Equal(t, http.StatusOK, get(t, server.public, "/supported").Code)
 }

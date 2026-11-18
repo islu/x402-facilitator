@@ -53,44 +53,53 @@ func run() error {
 	defer stopWorkers()
 
 	var workers sync.WaitGroup
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
+	workers.Go(func() {
 		app.Wallets.Watch(workerCtx, cfg.BalanceCheckInterval)
-	}()
+	})
 
-	if app.Limiter.Enabled() {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			app.Limiter.RunCleanup(time.Minute, workerCtx.Done())
-		}()
-	}
-
+	const readTimeout = 30 * time.Second
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: app.Router,
 		// Settlement waits on block inclusion, so the write deadline must clear
-		// the settle timeout or gin would cut a settlement off mid-flight.
+		// the settle timeout or gin would cut a settlement off mid-flight. It
+		// starts once the headers are read, so it also covers reading the body
+		// (bounded by ReadTimeout), which the settle timeout does not. The
+		// extra 30s covers an EVM settlement whose receipt wait timed out
+		// (outcomeBudget in internal/infra/chain/evm/signer.go).
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      cfg.SettleTimeout + 30*time.Second,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      readTimeout + cfg.SettleTimeout + 30*time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
-	serverErrors := make(chan error, 1)
-	go func() {
-		app.Logger.Info("facilitator listening",
-			"port", cfg.Port,
-			"networks", cfg.Networks(),
-			"rate_limit_per_minute", cfg.RateLimitPerMinute,
-		)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	// Metrics live on their own port so wallet balances and traffic are not
+	// readable by every caller; expose it to the scraper only.
+	admin := &http.Server{
+		Addr:              ":" + cfg.AdminPort,
+		Handler:           app.Admin,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	serverErrors := make(chan error, 2)
+	serve := func(s *http.Server) {
+		if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErrors <- err
-			return
 		}
-		serverErrors <- nil
-	}()
+	}
+	app.Logger.Info("facilitator listening",
+		"port", cfg.Port,
+		"admin_port", cfg.AdminPort,
+		"networks", cfg.Networks(),
+		"rate_limit_per_minute", cfg.RateLimitPerMinute,
+		"rate_limit_per_ip_per_minute", cfg.RateLimitPerIPPerMinute,
+		"allowed_assets", len(cfg.AllowedAssets),
+	)
+	if len(cfg.AllowedAssets) == 0 {
+		app.Logger.Warn("ALLOWED_ASSETS is empty: any token is settled, and the settlement wallet pays gas for it")
+	}
+	go serve(server)
+	go serve(admin)
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
@@ -111,6 +120,8 @@ func run() error {
 			app.Logger.Error("graceful shutdown failed, closing connections", "error", err)
 			_ = server.Close()
 		}
+		// Metrics stay scrapeable while settlements drain, then go.
+		_ = admin.Close()
 		stopWorkers()
 		workers.Wait()
 		app.Logger.Info("shutdown complete")

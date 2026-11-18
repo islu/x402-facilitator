@@ -9,8 +9,10 @@ package svm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	solana "github.com/gagliardetto/solana-go"
@@ -49,7 +51,12 @@ type Signer struct {
 var _ svmmech.FacilitatorSvmSigner = (*Signer)(nil)
 
 // New builds a Solana signer for network.
-func New(network string, cfg Config) (*Signer, error) {
+//
+// It fails if the key is unusable, the endpoint is unreachable, or the endpoint
+// serves a different cluster than the CAIP-2 network id names — the Solana
+// counterpart of the EVM chain ID check, so a devnet URL configured for
+// mainnet fails the boot instead of every settlement.
+func New(ctx context.Context, network string, cfg Config) (*Signer, error) {
 	key, err := solana.PrivateKeyFromBase58(cfg.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("parse solana private key for %s: %w", network, err)
@@ -70,12 +77,32 @@ func New(network string, cfg Config) (*Signer, error) {
 		cfg.ConfirmDelay = svmmech.ConfirmRetryDelay
 	}
 
+	client := rpc.New(rpcURL)
+	genesis, err := client.GetGenesisHash(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read genesis hash for %s: %w", network, err)
+	}
+	if err := checkGenesis(network, genesis.String()); err != nil {
+		return nil, err
+	}
+
 	return &Signer{
 		cfg:     cfg,
 		key:     key,
-		client:  rpc.New(rpcURL),
+		client:  client,
 		network: network,
 	}, nil
+}
+
+// checkGenesis compares a cluster's genesis hash with the network id. A
+// Solana CAIP-2 reference is the first 32 characters of the base58 genesis
+// hash, e.g. solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp for mainnet.
+func checkGenesis(network, genesis string) error {
+	reference := strings.TrimPrefix(network, "solana:")
+	if reference == "" || !strings.HasPrefix(genesis, reference) {
+		return fmt.Errorf("RPC for %s serves the cluster with genesis hash %s", network, genesis)
+	}
+	return nil
 }
 
 // Network returns the CAIP-2 network this signer settles on.
@@ -118,12 +145,11 @@ func (s *Signer) SignTransaction(_ context.Context, tx *solana.Transaction, feeP
 }
 
 // SimulateTransaction checks the transaction would succeed before broadcasting.
-func (s *Signer) SimulateTransaction(ctx context.Context, tx *solana.Transaction, _ string) error {
-	result, err := s.client.SimulateTransactionWithOpts(ctx, tx, &rpc.SimulateTransactionOpts{
-		SigVerify:              true,
-		ReplaceRecentBlockhash: false,
-		Commitment:             svmmech.DefaultCommitment,
-	})
+//
+// The SDK simulates during verify, before the fee payer signs, and checks the
+// client's signatures locally; nil opts therefore leave RPC sigVerify off.
+func (s *Signer) SimulateTransaction(ctx context.Context, tx *solana.Transaction, _ string, opts *svmmech.FacilitatorSimulateTransactionOptions) error {
+	result, err := s.client.SimulateTransactionWithOpts(ctx, tx, svmmech.SimulationRPCOpts(opts))
 	if err != nil {
 		return fmt.Errorf("simulate transaction: %w", err)
 	}
@@ -151,7 +177,7 @@ func (s *Signer) SendTransaction(ctx context.Context, tx *solana.Transaction, _ 
 // ConfirmTransaction polls until the transaction reaches the configured
 // commitment level, fails on-chain, or the attempt budget is exhausted.
 func (s *Signer) ConfirmTransaction(ctx context.Context, signature solana.Signature, _ string) error {
-	for attempt := 0; attempt < s.cfg.ConfirmAttempts; attempt++ {
+	for range s.cfg.ConfirmAttempts {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -185,7 +211,7 @@ func (s *Signer) Balance(ctx context.Context) (wallet.Balance, error) {
 		return wallet.Balance{}, fmt.Errorf("read SOL balance: %w", err)
 	}
 	if result == nil {
-		return wallet.Balance{}, fmt.Errorf("empty balance response")
+		return wallet.Balance{}, errors.New("empty balance response")
 	}
 
 	return wallet.Balance{

@@ -3,7 +3,6 @@ package wallet
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"maps"
 	"math/big"
@@ -40,7 +39,7 @@ func newServiceDeps(*gomock.Controller) serviceDeps {
 		wallets: wallet.Registry{},
 		metrics: newRecordingRecorder(),
 		cfg:     Config{},
-		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		logger:  slog.New(slog.DiscardHandler),
 	}
 }
 
@@ -85,7 +84,7 @@ func Test_CheckBalances(t *testing.T) {
 			// an operator alerts on.
 			name: "a low wallet is still reported",
 			setup: func(ctrl *gomock.Controller, d *serviceDeps) {
-				d.cfg = Config{MinBalance: big.NewInt(1e17)}
+				d.cfg = Config{MinBalance: map[string]*big.Int{testNetwork: big.NewInt(1e17)}}
 				reader := mocks.NewMockBalanceReader(ctrl)
 				reader.EXPECT().Balance(gomock.Any()).Return(ethBalance(0), nil)
 				d.wallets[testNetwork] = reader
@@ -171,8 +170,7 @@ func Test_Watch(t *testing.T) {
 				AnyTimes()
 			deps.wallets[testNetwork] = reader
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			returned := make(chan struct{})
 			go func() {
 				newService(deps).Watch(ctx, tt.interval)

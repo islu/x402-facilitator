@@ -134,6 +134,33 @@ func Test_ParseMetadata(t *testing.T) {
 			want:         Metadata{Payer: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1"},
 		},
 		{
+			// The SDK decodes requirements into a typed struct, where a field
+			// spelled twice resolves case-insensitively to the last one. The
+			// policy must judge that same asset, or an allowed spelling smuggles
+			// an unlisted token past the allowlist.
+			name:         "a field spelled twice resolves as the SDK resolves it",
+			payload:      `{"x402Version": 2}`,
+			requirements: `{"network": "eip155:1", "asset": "0xAAA", "Asset": "0xBBB", "amount": "1"}`,
+			want: Metadata{
+				Version: 2,
+				Network: "eip155:1",
+				Asset:   "0xbbb",
+				Amount:  big.NewInt(1),
+			},
+		},
+		{
+			// v1 settles maxAmountRequired; an unrelated amount field must not
+			// lift a payment over the minimum.
+			name:         "a v1 payment is measured by maxAmountRequired even beside amount",
+			payload:      `{"x402Version": 1}`,
+			requirements: `{"network": "base-sepolia", "amount": "1000", "maxAmountRequired": "1"}`,
+			want: Metadata{
+				Version: 1,
+				Network: "base-sepolia",
+				Amount:  big.NewInt(1),
+			},
+		},
+		{
 			name:         "an empty request yields empty metadata",
 			payload:      ``,
 			requirements: ``,
@@ -151,6 +178,7 @@ func Test_ParseMetadata(t *testing.T) {
 			assert.Equal(t, tc.want.Version, got.Version, "version")
 			assert.Equal(t, tc.want.Scheme, got.Scheme, "scheme")
 			assert.Equal(t, tc.want.Network, got.Network, "network")
+			assert.Equal(t, tc.want.Asset, got.Asset, "asset")
 			assert.Equal(t, tc.want.Payer, got.Payer, "payer")
 			if tc.want.Amount == nil {
 				assert.Nil(t, got.Amount, "amount")

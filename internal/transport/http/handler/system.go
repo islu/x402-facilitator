@@ -8,11 +8,16 @@ import (
 	"github.com/islu/x402-facilitator/internal/transport/http/response"
 )
 
-// RegisterSystemRoutes mounts the operational endpoints: liveness, readiness
-// and the metrics scrape.
+// RegisterSystemRoutes mounts the public operational endpoints: liveness and
+// readiness, which load balancers probe on the traffic port.
 func RegisterSystemRoutes(router gin.IRoutes, h *Handler) {
 	router.GET("/healthz", h.Healthz)
 	router.GET("/readyz", h.Readyz)
+}
+
+// RegisterAdminRoutes mounts the endpoints that belong on the admin port only.
+// Metrics expose wallet balances and traffic, which callers have no need for.
+func RegisterAdminRoutes(router gin.IRoutes, h *Handler) {
 	router.GET("/metrics", h.Metrics)
 }
 

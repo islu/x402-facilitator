@@ -1,8 +1,12 @@
 package payment
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"maps"
 	"math/big"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,7 +68,7 @@ func Test_SettlePayment(t *testing.T) {
 			name:   "an amount above the ceiling never reaches the processor",
 			amount: "2000000",
 			setup: func(d *serviceDeps) {
-				d.policy = payment.Policy{MaxSettleAmount: big.NewInt(1_000_000)}
+				d.policy = ceilingPolicy(1_000_000)
 			},
 			wantReason: payment.ReasonAmountTooBig,
 			wantMetrics: map[string]telemetry.Labels{
@@ -75,7 +79,7 @@ func Test_SettlePayment(t *testing.T) {
 			name:   "an amount exactly at the ceiling settles",
 			amount: "1000000",
 			setup: func(d *serviceDeps) {
-				d.policy = payment.Policy{MaxSettleAmount: big.NewInt(1_000_000)}
+				d.policy = ceilingPolicy(1_000_000)
 				d.processor.EXPECT().
 					Settle(gomock.Any(), gomock.Any()).
 					Return(payment.SettleResult{Success: true, Network: testNetwork}, nil)
@@ -88,6 +92,21 @@ func Test_SettlePayment(t *testing.T) {
 				d.processor.EXPECT().
 					Settle(gomock.Any(), gomock.Any()).
 					Return(payment.SettleResult{Success: true, Network: testNetwork}, nil)
+			},
+		},
+		{
+			// A worthless token would otherwise have the settlement wallet pay
+			// gas to move it.
+			name:   "an asset outside the allowlist never reaches the processor",
+			amount: "1000",
+			setup: func(d *serviceDeps) {
+				d.policy = payment.Policy{Assets: map[string]payment.AssetLimit{
+					payment.AssetKey(testNetwork, "0x000000000000000000000000000000000000dead"): {},
+				}}
+			},
+			wantReason: payment.ReasonAssetNotAllowed,
+			wantMetrics: map[string]telemetry.Labels{
+				metricRejected: {"network": testNetwork, "reason": payment.ReasonAssetNotAllowed},
 			},
 		},
 		{
@@ -119,7 +138,7 @@ func Test_SettlePayment(t *testing.T) {
 			deps.metrics = metrics
 			tt.setup(&deps)
 
-			result, err := newService(deps).SettlePayment(context.Background(), evmRequest(t, testPayer, tt.amount))
+			result, err := newService(deps).SettlePayment(context.Background(), evmRequest(t, tt.amount))
 
 			switch {
 			case tt.wantErr != nil:
@@ -145,6 +164,146 @@ func Test_SettlePayment(t *testing.T) {
 			}
 		})
 	}
+}
+
+func ceilingPolicy(ceiling int64) payment.Policy {
+	return payment.Policy{Assets: map[string]payment.AssetLimit{
+		payment.AssetKey(testNetwork, testAsset): {Max: big.NewInt(ceiling)},
+	}}
+}
+
+func Test_SettlePayment_Idempotent(t *testing.T) {
+	settled := payment.SettleResult{Success: true, Transaction: "0xdead", Network: testNetwork, Payer: testPayer}
+	reverted := payment.NewSettlementError("transaction_failed", "reverted", testPayer, testNetwork, "0xdead")
+
+	tests := []struct {
+		name string
+		// first is what the processor answers the first attempt with.
+		firstResult payment.SettleResult
+		firstErr    error
+		// wantCalls is how many times a retry reaches the processor in total.
+		wantCalls int
+	}{
+		{
+			// The mechanism would answer a retry with "nonce already used",
+			// telling the resource server a charged payer did not pay.
+			name:        "a retry after success replays the recorded transaction",
+			firstResult: settled,
+			wantCalls:   1,
+		},
+		{
+			name:      "a retry after a broadcast failure replays it instead of re-broadcasting",
+			firstErr:  reverted,
+			wantCalls: 1,
+		},
+		{
+			// Nothing reached the chain, so there is nothing to protect.
+			name:      "a retry after an outage tries again",
+			firstErr:  errRPCDown,
+			wantCalls: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			deps := newServiceDeps(ctrl)
+			calls := 0
+			deps.processor.EXPECT().
+				Settle(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(context.Context, payment.Request) (payment.SettleResult, error) {
+					calls++
+					if calls == 1 {
+						return tt.firstResult, tt.firstErr
+					}
+					return settled, nil
+				}).
+				AnyTimes()
+			svc := newService(deps)
+			req := evmRequest(t, "1000")
+			// The same documents re-serialized, as a client in another language
+			// might: other field order and spacing.
+			retry := payment.Request{Payload: reordered(t, req.Payload), Requirements: reordered(t, req.Requirements)}
+
+			first, firstErr := svc.SettlePayment(context.Background(), req)
+			second, secondErr := svc.SettlePayment(context.Background(), retry)
+
+			assert.Equal(t, tt.wantCalls, calls)
+			if tt.wantCalls == 1 {
+				assert.Equal(t, first, second)
+				assert.Equal(t, firstErr, secondErr)
+			}
+		})
+	}
+}
+
+// Two attempts racing each other would both pass verification and both
+// broadcast; the second must wait for the first instead.
+func Test_SettlePayment_ConcurrentDuplicateJoinsInFlight(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	deps := newServiceDeps(ctrl)
+	started, release := make(chan struct{}), make(chan struct{})
+	deps.processor.EXPECT().
+		Settle(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(context.Context, payment.Request) (payment.SettleResult, error) {
+			close(started)
+			<-release
+			return payment.SettleResult{Success: true, Transaction: "0xdead"}, nil
+		}).
+		Times(1)
+	svc := newService(deps)
+	req := evmRequest(t, "1000")
+
+	leader := make(chan payment.SettleResult)
+	go func() {
+		result, _ := svc.SettlePayment(context.Background(), req)
+		leader <- result
+	}()
+	<-started
+	follower := make(chan payment.SettleResult)
+	go func() {
+		result, _ := svc.SettlePayment(context.Background(), req)
+		follower <- result
+	}()
+	close(release)
+
+	assert.Equal(t, "0xdead", (<-leader).Transaction)
+	assert.Equal(t, "0xdead", (<-follower).Transaction)
+}
+
+// A recorded success is not replayed to a request settling the same payload
+// against other requirements: the mechanism must judge that one.
+func Test_SettlePayment_OtherRequirementsNotReplayed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	deps := newServiceDeps(ctrl)
+	deps.processor.EXPECT().Settle(gomock.Any(), gomock.Any()).
+		Return(payment.SettleResult{Success: true, Transaction: "0xdead"}, nil).Times(2)
+	svc := newService(deps)
+	req := evmRequest(t, "1000")
+	other := payment.Request{Payload: req.Payload, Requirements: evmRequest(t, "2000").Requirements}
+
+	_, err := svc.SettlePayment(context.Background(), req)
+	require.NoError(t, err)
+	_, err = svc.SettlePayment(context.Background(), other)
+	require.NoError(t, err)
+}
+
+// A caller that hangs up mid-settlement must not cancel it: its retry joins
+// the attempt and gets the real outcome.
+func Test_SettlePayment_CallerCancelDoesNotReachMechanism(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	deps := newServiceDeps(ctrl)
+	deps.processor.EXPECT().Settle(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, _ payment.Request) (payment.SettleResult, error) {
+			return payment.SettleResult{Success: true, Transaction: "0xdead"}, ctx.Err()
+		}).Times(1)
+	svc := newService(deps)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result, err := svc.SettlePayment(ctx, evmRequest(t, "1000"))
+	require.NoError(t, err)
+	assert.Equal(t, "0xdead", result.Transaction)
 }
 
 func Test_ListSupported(t *testing.T) {
@@ -189,4 +348,30 @@ func Test_ListSupported(t *testing.T) {
 			assert.Equal(t, tt.wantReason, reason)
 		})
 	}
+}
+
+// reordered re-serializes a JSON object with its top-level fields in reverse
+// order and spaced out.
+func reordered(t *testing.T, doc []byte) []byte {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(doc, &fields))
+	keys := slices.Sorted(maps.Keys(fields))
+	slices.Reverse(keys)
+
+	var b bytes.Buffer
+	b.WriteString("{ ")
+	for i, key := range keys {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		name, err := json.Marshal(key)
+		require.NoError(t, err)
+		b.Write(name)
+		b.WriteString(": ")
+		b.Write(fields[key])
+	}
+	b.WriteString(" }")
+	require.NotEqual(t, string(doc), b.String())
+	return b.Bytes()
 }

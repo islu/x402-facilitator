@@ -2,7 +2,6 @@ package payment
 
 import (
 	"encoding/json"
-	"io"
 	"log/slog"
 	"maps"
 	"slices"
@@ -23,6 +22,7 @@ const (
 	testPayer   = "0xabcdef0123456789012345678901234567890123"
 	testNetwork = "eip155:84532"
 	testScheme  = "exact"
+	testAsset   = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
 )
 
 type serviceDeps struct {
@@ -39,22 +39,23 @@ func newServiceDeps(ctrl *gomock.Controller) serviceDeps {
 		limiter:   disabledLimiter{},
 		metrics:   discardRecorder{},
 		policy:    payment.Policy{},
-		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		logger:    slog.New(slog.DiscardHandler),
 	}
 }
 
 func newService(deps serviceDeps) *Service {
 	return &Service{
-		processor: deps.processor,
-		limiter:   deps.limiter,
-		metrics:   deps.metrics,
-		policy:    deps.policy,
-		logger:    deps.logger,
+		processor:   deps.processor,
+		limiter:     deps.limiter,
+		metrics:     deps.metrics,
+		policy:      deps.policy,
+		logger:      deps.logger,
+		settlements: newSettlementLog(),
 	}
 }
 
-// evmRequest builds a v2 EVM exact payment for the given payer and amount.
-func evmRequest(t *testing.T, payer, amount string) payment.Request {
+// evmRequest builds a v2 EVM exact payment from testPayer for the given amount.
+func evmRequest(t *testing.T, amount string) payment.Request {
 	t.Helper()
 
 	payload, err := json.Marshal(map[string]any{
@@ -63,10 +64,11 @@ func evmRequest(t *testing.T, payer, amount string) payment.Request {
 			"scheme":  testScheme,
 			"network": testNetwork,
 			"amount":  amount,
+			"asset":   testAsset,
 		},
 		"payload": map[string]any{
 			"signature":     "0xsig",
-			"authorization": map[string]any{"from": payer},
+			"authorization": map[string]any{"from": testPayer},
 		},
 	})
 	if err != nil {
@@ -77,6 +79,7 @@ func evmRequest(t *testing.T, payer, amount string) payment.Request {
 		"scheme":  testScheme,
 		"network": testNetwork,
 		"amount":  amount,
+		"asset":   testAsset,
 	})
 	if err != nil {
 		t.Fatalf("marshal requirements: %v", err)
@@ -89,10 +92,10 @@ func evmRequest(t *testing.T, payer, amount string) payment.Request {
 // countingLimiter instead.
 type disabledLimiter struct{}
 
-func (disabledLimiter) Allow(string) bool { return true }
-func (disabledLimiter) Enabled() bool     { return false }
+func (disabledLimiter) Allow(string) bool    { return true }
+func (disabledLimiter) Exceeded(string) bool { return false }
 
-// countingLimiter allows the first n calls and records the keys it saw.
+// countingLimiter allows the first n recorded calls and records the keys it saw.
 type countingLimiter struct {
 	remaining int
 	keys      []string
@@ -107,7 +110,7 @@ func (l *countingLimiter) Allow(key string) bool {
 	return true
 }
 
-func (l *countingLimiter) Enabled() bool { return true }
+func (l *countingLimiter) Exceeded(string) bool { return l.remaining <= 0 }
 
 // discardRecorder drops metrics; tests that assert on them use recordingRecorder.
 type discardRecorder struct{}

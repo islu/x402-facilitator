@@ -36,3 +36,6 @@ go.work.sum
 
 # devbox: project-local GOPATH
 /.go/
+
+# BACKLOG.md
+BACKLOG.md
