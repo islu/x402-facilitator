@@ -66,6 +66,10 @@ func settlementKey(req payment.Request) string {
 // map keys), its spacing dropped and its numbers kept verbatim (json.Number),
 // so field order and formatting do not change the key. A document that is not
 // a single JSON value is used as is.
+//
+// Sorting is only sound because the HTTP layer refuses documents that repeat a
+// member name case-insensitively (duplicateName in transport/http/handler):
+// the SDK resolves such a repeat by order, which sorting would erase.
 func canonicalJSON(doc []byte) []byte {
 	dec := json.NewDecoder(bytes.NewReader(doc))
 	dec.UseNumber()

@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 
@@ -49,9 +53,78 @@ func bindPayment(c *gin.Context) (payment.Request, bool) {
 		response.Error(c, http.StatusBadRequest, "paymentRequirements is required")
 		return payment.Request{}, false
 	}
+	for field, doc := range map[string][]byte{
+		"paymentPayload":      req.PaymentPayload,
+		"paymentRequirements": req.PaymentRequirements,
+	} {
+		if name, dup := duplicateName(doc); dup {
+			response.Error(c, http.StatusBadRequest, fmt.Sprintf("%s repeats the member name %q", field, name))
+			return payment.Request{}, false
+		}
+	}
 
 	return payment.Request{
 		Payload:      req.PaymentPayload,
 		Requirements: req.PaymentRequirements,
 	}, true
+}
+
+// duplicateName reports a member name that repeats within one object of doc,
+// compared the way encoding/json matches a member to a struct field: case
+// insensitively.
+//
+// The SDK decodes the documents into structs, where {"asset":"A","Asset":"B"}
+// silently resolves to its last spelling, so the same members in another order
+// are another payment. Anything that reads the document by other rules (the
+// settlement key sorts member names) would then take two payments for one.
+// No client means anything by such a document, so it is refused here, once,
+// for every reader downstream.
+func duplicateName(doc []byte) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(doc))
+	// One entry per open container: an object's member names so far, or nil
+	// for an array.
+	var open []map[string]bool
+	expectName := false
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", false // end of document; the bind already rejected malformed JSON
+		}
+		if name, ok := tok.(string); ok && expectName {
+			folded := foldName(name)
+			if open[len(open)-1][folded] {
+				return name, true
+			}
+			open[len(open)-1][folded] = true
+			expectName = false
+			continue
+		}
+		switch tok {
+		case json.Delim('{'):
+			open = append(open, map[string]bool{})
+			expectName = true
+			continue
+		case json.Delim('['):
+			open = append(open, nil)
+			continue
+		case json.Delim('}'), json.Delim(']'):
+			open = open[:len(open)-1]
+		}
+		// A value just ended, a scalar or a closed container: inside an object,
+		// a member name or '}' comes next.
+		expectName = len(open) > 0 && open[len(open)-1] != nil
+	}
+}
+
+// foldName maps every case variant of name to one key: each rune becomes the
+// smallest rune of its Unicode simple-folding orbit, so foldName(a) ==
+// foldName(b) exactly when strings.EqualFold(a, b), the rule encoding/json uses.
+func foldName(name string) string {
+	return strings.Map(func(r rune) rune {
+		smallest := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			smallest = min(smallest, f)
+		}
+		return smallest
+	}, name)
 }
