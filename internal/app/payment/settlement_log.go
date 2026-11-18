@@ -68,7 +68,7 @@ func settlementKey(req payment.Request) string {
 // a single JSON value is used as is.
 //
 // Sorting is only sound because the HTTP layer refuses documents that repeat a
-// member name case-insensitively (duplicateName in transport/http/handler):
+// member name case-insensitively (checkMemberNames in transport/http/handler):
 // the SDK resolves such a repeat by order, which sorting would erase.
 func canonicalJSON(doc []byte) []byte {
 	dec := json.NewDecoder(bytes.NewReader(doc))

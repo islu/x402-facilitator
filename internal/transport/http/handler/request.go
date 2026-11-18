@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"unicode"
@@ -57,8 +58,8 @@ func bindPayment(c *gin.Context) (payment.Request, bool) {
 		"paymentPayload":      req.PaymentPayload,
 		"paymentRequirements": req.PaymentRequirements,
 	} {
-		if name, dup := duplicateName(doc); dup {
-			response.Error(c, http.StatusBadRequest, fmt.Sprintf("%s repeats the member name %q", field, name))
+		if err := checkMemberNames(doc); err != nil {
+			response.Error(c, http.StatusBadRequest, field+" "+err.Error())
 			return payment.Request{}, false
 		}
 	}
@@ -69,31 +70,41 @@ func bindPayment(c *gin.Context) (payment.Request, bool) {
 	}, true
 }
 
-// duplicateName reports a member name that repeats within one object of doc,
-// compared the way encoding/json matches a member to a struct field: case
-// insensitively.
+// checkMemberNames refuses doc if a member name repeats within one of its
+// objects, compared the way encoding/json matches a member to a struct field:
+// case insensitively.
 //
 // The SDK decodes the documents into structs, where {"asset":"A","Asset":"B"}
 // silently resolves to its last spelling, so the same members in another order
 // are another payment. Anything that reads the document by other rules (the
 // settlement key sorts member names) would then take two payments for one.
 // No client means anything by such a document, so it is refused here, once,
-// for every reader downstream.
-func duplicateName(doc []byte) (string, bool) {
+// for every reader downstream. A document the scan cannot finish is refused
+// too, rather than passed unchecked.
+func checkMemberNames(doc []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(doc))
+	// Numbers stay text: a valid 1e1000 overflows a float64 and would end the
+	// scan before the members after it.
+	dec.UseNumber()
 	// One entry per open container: an object's member names so far, or nil
 	// for an array.
 	var open []map[string]bool
 	expectName := false
 	for {
 		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			if len(open) > 0 { // Token reports a document cut off inside a container as a plain EOF
+				return errors.New("cannot be read: it ends inside an object or array")
+			}
+			return nil
+		}
 		if err != nil {
-			return "", false // end of document; the bind already rejected malformed JSON
+			return fmt.Errorf("cannot be read: %w", err)
 		}
 		if name, ok := tok.(string); ok && expectName {
 			folded := foldName(name)
 			if open[len(open)-1][folded] {
-				return name, true
+				return fmt.Errorf("repeats the member name %q", name)
 			}
 			open[len(open)-1][folded] = true
 			expectName = false
