@@ -9,7 +9,7 @@ require (
 	github.com/google/wire v0.7.0
 	github.com/joho/godotenv v1.5.1
 	github.com/stretchr/testify v1.12.1
-	github.com/x402-foundation/x402/go/v2 v2.31.0
+	github.com/x402-foundation/x402/go/v2 v2.32.0
 	go.uber.org/mock v0.6.0
 )
 
